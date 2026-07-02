@@ -12,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY collector.py dashboard.py db.py import_history.py docker-entrypoint.sh ./
+COPY collector.py config.py dashboard.py db.py import_history.py docker-entrypoint.sh ./
 
 VOLUME ["/data"]
 EXPOSE 8501
