@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import os
 
 import pandas as pd
 import streamlit as st
+from config import load_env
 
 from db import DB_PATH, connect, current_adoption_percentage, downloads_added_between_snapshots, fetch_rows, init_db, milestone_download_totals, snapshots_for_repo, total_downloads_by_release
+
+load_env()
+DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
 
 st.set_page_config(page_title="Release Download Analytics", layout="wide")
 st.title("Release Download Analytics")
@@ -17,7 +22,7 @@ def repos(db_path: str) -> list[str]:
         init_db(conn)
         return [row["full_name"] for row in fetch_rows(conn, "SELECT full_name FROM repos ORDER BY full_name")]
 
-db_path = st.sidebar.text_input("SQLite database", DB_PATH)
+db_path = st.sidebar.text_input("SQLite database", DEFAULT_DB_PATH)
 repo_names = repos(db_path)
 if not repo_names:
     st.info("No data yet. Run collector.py or import_history.py first.")

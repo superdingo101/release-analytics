@@ -4,10 +4,16 @@ from __future__ import annotations
 import argparse
 import logging
 import hashlib
+import os
 import re
 import sys
 
+from config import load_env
+
 from db import DB_PATH, connect, init_db, insert_snapshot, upsert_asset, upsert_release, upsert_repo
+
+load_env()
+DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
 
 log = logging.getLogger(__name__)
 TIME_RE = re.compile(r"Current UTC time:\s*(?P<time>\S+)")
@@ -48,8 +54,9 @@ def parse_history(text: str) -> tuple[str, list[dict[str, object]]]:
     return collected_at, snapshots
 
 
-def import_history(repo: str, text: str, db_path: str = DB_PATH) -> int:
+def import_history(repo: str, text: str, db_path: str | None = None) -> int:
     collected_at, snapshots = parse_history(text)
+    db_path = db_path or os.getenv("DB_PATH", DB_PATH)
     with connect(db_path) as conn:
         init_db(conn)
         repo_id = upsert_repo(conn, repo)
@@ -64,7 +71,7 @@ def import_history(repo: str, text: str, db_path: str = DB_PATH) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Import pasted historical snapshots from stdin")
     parser.add_argument("--repo", required=True, help="owner/name repo for the pasted data")
-    parser.add_argument("--db", default=DB_PATH)
+    parser.add_argument("--db", default=DEFAULT_DB_PATH)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     count = import_history(args.repo, sys.stdin.read(), args.db)

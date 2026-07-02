@@ -7,7 +7,7 @@ import os
 from typing import Any
 
 import requests
-from dotenv import load_dotenv
+from config import load_env
 
 from db import DB_PATH, connect, init_db, insert_snapshot, upsert_asset, upsert_release, upsert_repo, utc_now_iso
 
@@ -24,11 +24,18 @@ def fetch_releases(repo: str, token: str | None = None) -> list[dict[str, Any]]:
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    response = requests.get(API.format(repo=repo), headers=headers, timeout=30)
-    if response.status_code >= 400:
-        log.error("GitHub API error for %s: %s %s", repo, response.status_code, response.text[:500])
-        response.raise_for_status()
-    return response.json()
+    releases: list[dict[str, Any]] = []
+    url: str | None = API.format(repo=repo)
+    params: dict[str, int] | None = {"per_page": 100}
+    while url:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code >= 400:
+            log.error("GitHub API error for %s: %s %s", repo, response.status_code, response.text[:500])
+            response.raise_for_status()
+        releases.extend(response.json())
+        url = response.links.get("next", {}).get("url")
+        params = None
+    return releases
 
 
 def collect_repo(repo: str, db_path: str = DB_PATH, include_drafts: bool = False) -> None:
@@ -59,7 +66,7 @@ def collect_repo(repo: str, db_path: str = DB_PATH, include_drafts: bool = False
 
 
 def main() -> None:
-    load_dotenv()
+    load_env()
     parser = argparse.ArgumentParser(description="Collect GitHub release download snapshots")
     parser.add_argument("--db", default=os.getenv("DB_PATH", DB_PATH))
     parser.add_argument("--repo", action="append", help="owner/name repo; can be repeated")

@@ -1,4 +1,3 @@
-python-dotenv>=1.0
 requests>=2.32
 streamlit>=1.36
 pandas>=2.2

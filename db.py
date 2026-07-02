@@ -81,12 +81,47 @@ def init_db(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_releases_repo_tag ON releases(repo_id, tag);
         CREATE INDEX IF NOT EXISTS idx_releases_published_at ON releases(published_at);
-        CREATE INDEX IF NOT EXISTS idx_assets_github_asset_id ON assets(github_asset_id);
         CREATE INDEX IF NOT EXISTS idx_snapshots_collected_at ON download_snapshots(collected_at);
         CREATE INDEX IF NOT EXISTS idx_events_occurred_at ON events(occurred_at);
         """
     )
+    _dedupe_assets(conn)
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_github_asset_id ON assets(github_asset_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_release_name ON assets(release_id, name);
+        """
+    )
     conn.commit()
+
+
+def _dedupe_assets(conn: sqlite3.Connection) -> None:
+    """Merge duplicate asset rows for the same release/name before adding constraints."""
+    duplicate_groups = conn.execute(
+        """
+        SELECT release_id, name, MIN(id) AS keep_id, GROUP_CONCAT(id) AS asset_ids
+        FROM assets
+        GROUP BY release_id, name
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in duplicate_groups:
+        keep_id = int(group["keep_id"])
+        asset_ids = [int(asset_id) for asset_id in str(group["asset_ids"]).split(",")]
+        discard_ids = [asset_id for asset_id in asset_ids if asset_id != keep_id]
+        for discard_id in discard_ids:
+            conn.execute(
+                """
+                DELETE FROM download_snapshots
+                WHERE asset_id = ?
+                  AND collected_at IN (
+                      SELECT collected_at FROM download_snapshots WHERE asset_id = ?
+                  )
+                """,
+                (discard_id, keep_id),
+            )
+            conn.execute("UPDATE download_snapshots SET asset_id = ? WHERE asset_id = ?", (keep_id, discard_id))
+            conn.execute("DELETE FROM assets WHERE id = ?", (discard_id,))
 
 
 def upsert_repo(conn: sqlite3.Connection, full_name: str, now: str | None = None) -> int:
@@ -115,6 +150,20 @@ def upsert_release(conn: sqlite3.Connection, repo_id: int, tag: str, published_a
 
 def upsert_asset(conn: sqlite3.Connection, release_id: int, github_asset_id: int, name: str) -> int:
     now = utc_now_iso()
+    existing_by_name = conn.execute(
+        "SELECT id, github_asset_id FROM assets WHERE release_id = ? AND name = ?",
+        (release_id, name),
+    ).fetchone()
+    if existing_by_name:
+        conn.execute(
+            """
+            UPDATE assets
+            SET github_asset_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (github_asset_id, now, int(existing_by_name["id"])),
+        )
+        return int(existing_by_name["id"])
     conn.execute(
         """
         INSERT INTO assets(release_id, github_asset_id, name, created_at, updated_at)
