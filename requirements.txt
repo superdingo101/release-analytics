@@ -1,0 +1,4 @@
+requests>=2.32
+streamlit>=1.36
+pandas>=2.2
+pytest>=8.2

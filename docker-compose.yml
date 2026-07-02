@@ -1,0 +1,18 @@
+services:
+  release-analytics:
+    build: .
+    container_name: release-analytics
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/release_analytics.sqlite3
+      RUN_INTERVAL_SECONDS: 21600
+      COLLECT_ON_START: "true"
+    ports:
+      - "8501:8501"
+    volumes:
+      - release_analytics_data:/data
+    restart: unless-stopped
+
+volumes:
+  release_analytics_data:
