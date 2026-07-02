@@ -181,7 +181,11 @@ def upsert_asset(conn: sqlite3.Connection, release_id: int, github_asset_id: int
 def insert_snapshot(conn: sqlite3.Connection, asset_id: int, collected_at: str, download_count: int) -> None:
     now = utc_now_iso()
     conn.execute(
-        "INSERT OR IGNORE INTO download_snapshots(asset_id, collected_at, download_count, created_at) VALUES (?, ?, ?, ?)",
+        """
+        INSERT INTO download_snapshots(asset_id, collected_at, download_count, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(asset_id, collected_at) DO NOTHING
+        """,
         (asset_id, collected_at, int(download_count), now),
     )
 
