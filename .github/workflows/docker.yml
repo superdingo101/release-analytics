@@ -1,0 +1,33 @@
+name: Docker image
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    name: Build and verify Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --tag release-analytics:test .
+
+      - name: Verify application files compile in image
+        run: docker run --rm --entrypoint python release-analytics:test -m compileall -q /app
+
+      - name: Verify core Python modules import in image
+        run: >-
+          docker run --rm --entrypoint python release-analytics:test
+          -c "import collector, config, db, import_history; print('image imports ok')"
+
+      - name: Verify collector command is available
+        run: docker run --rm release-analytics:test collect --help
+
+      - name: Verify history importer command is available
+        run: docker run --rm release-analytics:test import-history --help
