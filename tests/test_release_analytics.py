@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 import types
@@ -43,13 +44,15 @@ def test_load_env_ignores_comments_and_preserves_existing_env(tmp_path, monkeypa
     EXISTING=from-file
     INVALID_LINE
     """)
+    monkeypatch.delenv("REPOS", raising=False)
+    monkeypatch.delenv("QUOTED", raising=False)
     monkeypatch.setenv("EXISTING", "already-set")
 
     load_env(env_file)
 
     assert configured_repos() == ["owner/repo", "other/repo"]
-    assert __import__("os").environ["QUOTED"] == "hello world"
-    assert __import__("os").environ["EXISTING"] == "already-set"
+    assert os.environ["QUOTED"] == "hello world"
+    assert os.environ["EXISTING"] == "already-set"
 
 
 def test_configured_repos_splits_commas_and_newlines(monkeypatch):
