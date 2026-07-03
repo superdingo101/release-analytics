@@ -15,7 +15,8 @@ GitHub exposes only the **current cumulative** download count for each release a
 
 - `Dockerfile` builds the application image from `python:3.12-slim`.
 - `docker-compose.yml` runs the web dashboard, scheduled collector, environment configuration, and persistent SQLite volume.
-- `docker-entrypoint.sh` starts the collector loop and Streamlit dashboard, or dispatches one-shot commands.
+- `docker-entrypoint.sh` starts the collector scheduler and Streamlit dashboard, or dispatches one-shot commands.
+- `scheduler.py` aligns web-mode collector runs to tracked release publication times.
 - `collector.py` fetches GitHub release data and stores download snapshots.
 - `dashboard.py` serves the Streamlit analytics UI.
 - `db.py` creates the SQLite schema and provides metric helpers.
@@ -52,7 +53,7 @@ GitHub exposes only the **current cumulative** download count for each release a
 
    <http://localhost:8501>
 
-The default container mode starts Streamlit and runs the collector in the background. A collection happens immediately on startup, then repeats every `RUN_INTERVAL_SECONDS` seconds. The Compose default is `21600` seconds, or every 6 hours.
+The default container mode starts Streamlit and runs the collector scheduler in the background. By default, a collection happens immediately on startup so newly published releases are discovered. Future web-mode collections are release-time aligned: `RUN_INTERVAL_SECONDS` still controls the cadence, but each repository schedule is anchored to its latest tracked non-draft release `published_at` time. With the Compose default of `21600` seconds, a release published at 02:17 UTC is polled at 08:17, 14:17, 20:17, and so on. Each configured repository keeps its own aligned schedule; when multiple repositories are configured, the scheduler sleeps until the earliest repo due time and collects only repos due in that wake cycle. If the database has no known release rows yet, the scheduler falls back to the previous fixed interval behavior until a release is discovered.
 
 ## Runtime configuration
 
@@ -64,8 +65,8 @@ Configure the container with `.env` and Compose environment values:
 | `GITHUB_TOKEN` | empty | Optional GitHub token for higher API rate limits. |
 | `DB_PATH` | `/data/release_analytics.sqlite3` in Docker | SQLite database path. Keep this under `/data` in Docker so it is persisted. |
 | `LOG_LEVEL` | `INFO` | Python logging level. |
-| `RUN_INTERVAL_SECONDS` | `21600` | Delay between collector runs in web mode. |
-| `COLLECT_ON_START` | `true` | Run the collector once before waiting for the first interval. |
+| `RUN_INTERVAL_SECONDS` | `21600` | Web-mode collection cadence in seconds, anchored to each tracked release `published_at` time after releases are known. |
+| `COLLECT_ON_START` | `true` | Run the collector once on startup before release-aligned scheduling begins, helping discover new releases immediately. |
 | `STREAMLIT_SERVER_ADDRESS` | `0.0.0.0` | Streamlit bind address inside the container. |
 | `STREAMLIT_SERVER_PORT` | `8501` | Streamlit port inside the container. |
 
@@ -150,7 +151,7 @@ Dashboard sections:
 - **Total downloads by release** compares latest cumulative asset downloads per release.
 - **Cumulative downloads by release age** overlays versions by days since publication, useful for adoption curves.
 - **Daily downloads by version** shows downloads added per day from snapshot deltas.
-- **Release comparison milestones** reports 24h, 72h, 7d, and 14d totals when snapshots exist before those cutoffs.
+- **Release comparison milestones** reports 24h, 72h, 7d, and 14d totals using snapshots at or shortly after each cutoff, so release-aligned samples collected a few minutes late still count without treating far-late samples as exact milestones.
 - **Events / annotations** displays rows from the `events` table for notes such as blog posts, docs launches, Reddit posts, or social announcements.
 
 ## Local development
