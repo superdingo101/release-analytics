@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 DB_PATH = "release_analytics.sqlite3"
 MILESTONE_HOURS = (24, 72, 168, 336)
+MILESTONE_GRACE_SECONDS = 15 * 60
 
 
 def utc_now_iso() -> str:
@@ -277,7 +278,8 @@ def milestone_download_totals(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         published = parse_utc(items[0]["published_at"])
         for hours in MILESTONE_HOURS:
             cutoff = published.timestamp() + hours * 3600
-            eligible = [r for r in items if parse_utc(r["collected_at"]).timestamp() <= cutoff]
+            latest_allowed = cutoff + MILESTONE_GRACE_SECONDS
+            eligible = [r for r in items if parse_utc(r["collected_at"]).timestamp() <= latest_allowed]
             label = {24: "24h", 72: "72h", 168: "7d", 336: "14d"}[hours]
             item[label] = max((r["download_count"] for r in eligible), default=None)
         result.append(item)

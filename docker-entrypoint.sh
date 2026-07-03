@@ -7,16 +7,10 @@ set -eu
 : "${STREAMLIT_SERVER_PORT:=8501}"
 : "${STREAMLIT_SERVER_ADDRESS:=0.0.0.0}"
 
-export DB_PATH RUN_INTERVAL_SECONDS STREAMLIT_SERVER_PORT STREAMLIT_SERVER_ADDRESS
+export DB_PATH RUN_INTERVAL_SECONDS COLLECT_ON_START STREAMLIT_SERVER_PORT STREAMLIT_SERVER_ADDRESS
 
 run_collector_loop() {
-  if [ "${COLLECT_ON_START}" = "true" ]; then
-    python collector.py || true
-  fi
-  while true; do
-    sleep "${RUN_INTERVAL_SECONDS}"
-    python collector.py || true
-  done
+  python scheduler.py || true
 }
 
 case "${1:-web}" in

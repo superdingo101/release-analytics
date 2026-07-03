@@ -169,6 +169,14 @@ def test_milestone_download_totals_uses_latest_snapshot_before_cutoff():
     assert milestone_download_totals(rows) == [{"tag": "v1", "24h": 9, "72h": 9, "7d": 20, "14d": 20}]
 
 
+def test_milestone_download_totals_allows_small_late_release_aligned_sample():
+    rows = [
+        {"tag": "v1", "published_at": "2026-07-01T02:17:00Z", "collected_at": "2026-07-02T02:20:00Z", "download_count": 12},
+        {"tag": "v1", "published_at": "2026-07-01T02:17:00Z", "collected_at": "2026-07-02T03:00:00Z", "download_count": 18},
+    ]
+    assert milestone_download_totals(rows)[0]["24h"] == 12
+
+
 def test_fetch_releases_sends_token_and_raises_http_errors(monkeypatch):
     class Response:
         status_code = 403
