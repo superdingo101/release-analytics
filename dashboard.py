@@ -81,6 +81,11 @@ if "release_age_days_limit" not in st.session_state:
 if st.session_state.release_age_days_limit > max_release_age_days:
     st.session_state.release_age_days_limit = max_release_age_days
 
+
+def reset_release_age_days_limit(max_days: float) -> None:
+    st.session_state.release_age_days_limit = max_days
+
+
 limit_col, reset_col = st.columns([3, 1])
 with limit_col:
     release_age_days_limit = st.number_input(
@@ -96,9 +101,12 @@ with limit_col:
 with reset_col:
     st.write("")
     st.write("")
-    if st.button("Reset view", use_container_width=True):
-        st.session_state.release_age_days_limit = max_release_age_days
-        st.rerun()
+    st.button(
+        "Reset view",
+        use_container_width=True,
+        on_click=reset_release_age_days_limit,
+        args=(max_release_age_days,),
+    )
 
 filtered_age_df = age_df[age_df["release_age_days"] <= release_age_days_limit]
 age_chart = (
