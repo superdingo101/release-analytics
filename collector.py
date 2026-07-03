@@ -50,10 +50,6 @@ def collect_repo(repo: str, db_path: str = DB_PATH, include_drafts: bool = False
                 log.info("Skipping draft release %s %s", repo, release.get("tag_name"))
                 continue
             published_at = release.get("published_at") or release.get("created_at")
-            existing_release = conn.execute(
-                "SELECT id FROM releases WHERE repo_id = ? AND tag = ?",
-                (repo_id, release["tag_name"]),
-            ).fetchone()
             release_id = upsert_release(
                 conn,
                 repo_id,
@@ -63,11 +59,9 @@ def collect_repo(repo: str, db_path: str = DB_PATH, include_drafts: bool = False
                 bool(release.get("draft")),
                 release.get("html_url", ""),
             )
-            is_new_release = existing_release is None
             for asset in release.get("assets", []):
                 asset_id = upsert_asset(conn, release_id, int(asset["id"]), asset["name"])
-                if is_new_release:
-                    insert_snapshot(conn, asset_id, published_at, 0)
+                insert_snapshot(conn, asset_id, published_at, 0)
                 insert_snapshot(conn, asset_id, collected_at, int(asset.get("download_count", 0)))
                 log.info("Stored %s %s %s=%s", repo, release["tag_name"], asset["name"], asset.get("download_count", 0))
         conn.commit()
