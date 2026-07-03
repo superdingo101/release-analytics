@@ -73,10 +73,34 @@ st.subheader("Total downloads by release")
 st.bar_chart(pd.DataFrame(totals).set_index("tag")["downloads"] if totals else pd.Series(dtype=int))
 
 st.subheader("Cumulative downloads by release age")
-age_df = df.sort_values("release_age_hours")[["tag", "release_age_days", "download_count"]]
-max_release_age_days = float(age_df["release_age_days"].max()) if not age_df.empty else 0.0
+age_df = df.sort_values("release_age_hours")[["tag", "published_at", "collected_at", "release_age_days", "download_count"]]
+release_order = (
+    age_df[["tag", "published_at"]]
+    .drop_duplicates()
+    .sort_values(["published_at", "tag"])
+    .reset_index(drop=True)
+)
+release_order["superseded_at"] = release_order["published_at"].shift(-1)
+age_df = age_df.merge(release_order[["tag", "superseded_at"]], on="tag", how="left")
+
+limit_to_before_superseded = st.toggle(
+    "Only show releases until superseded",
+    value=False,
+    help="When enabled, each release line stops at the next selected release's publication time.",
+)
+superseded_age_df = age_df[
+    age_df["superseded_at"].isna() | (age_df["collected_at"] < age_df["superseded_at"])
+]
+chart_age_df = superseded_age_df if limit_to_before_superseded else age_df
+max_release_age_days = float(chart_age_df["release_age_days"].max()) if not chart_age_df.empty else 0.0
+
 if "release_age_days_limit" not in st.session_state:
     st.session_state.release_age_days_limit = max_release_age_days
+if "limit_to_before_superseded_previous" not in st.session_state:
+    st.session_state.limit_to_before_superseded_previous = limit_to_before_superseded
+if st.session_state.limit_to_before_superseded_previous != limit_to_before_superseded:
+    st.session_state.release_age_days_limit = max_release_age_days
+    st.session_state.limit_to_before_superseded_previous = limit_to_before_superseded
 
 if st.session_state.release_age_days_limit > max_release_age_days:
     st.session_state.release_age_days_limit = max_release_age_days
@@ -108,7 +132,7 @@ with reset_col:
         args=(max_release_age_days,),
     )
 
-filtered_age_df = age_df[age_df["release_age_days"] <= release_age_days_limit]
+filtered_age_df = chart_age_df[chart_age_df["release_age_days"] <= release_age_days_limit]
 age_chart = (
     alt.Chart(filtered_age_df)
     .mark_line()
