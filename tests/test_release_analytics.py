@@ -218,4 +218,37 @@ def test_collect_repo_persists_releases_and_skips_drafts(tmp_path, monkeypatch):
 
     with connect(tmp_path / "analytics.sqlite3") as conn:
         rows = snapshots_for_repo(conn, "owner/repo", include_prereleases=True, asset_name="app.js")
-    assert [(row["tag"], row["download_count"]) for row in rows] == [("v1", 11)]
+    assert [(row["tag"], row["collected_at"], row["download_count"]) for row in rows] == [
+        ("v1", "2026-07-01T00:00:00Z", 0),
+        ("v1", "2026-07-03T00:00:00Z", 11),
+    ]
+
+
+def test_collect_repo_only_seeds_zero_snapshot_first_time_release_is_seen(tmp_path, monkeypatch):
+    payload = [
+        {
+            "tag_name": "v1",
+            "published_at": "2026-07-01T00:00:00Z",
+            "created_at": "2026-07-01T00:00:00Z",
+            "prerelease": False,
+            "draft": False,
+            "html_url": "https://example.test/v1",
+            "assets": [{"id": 1, "name": "app.js", "download_count": 11}],
+        },
+    ]
+    collection_times = iter(["2026-07-03T00:00:00Z", "2026-07-04T00:00:00Z"])
+    monkeypatch.setattr("collector.fetch_releases", lambda repo, token=None: payload)
+    monkeypatch.setattr("collector.utc_now_iso", lambda: next(collection_times))
+
+    db_file = tmp_path / "analytics.sqlite3"
+    collect_repo("owner/repo", str(db_file))
+    collect_repo("owner/repo", str(db_file))
+
+    with connect(db_file) as conn:
+        rows = snapshots_for_repo(conn, "owner/repo", include_prereleases=True, asset_name="app.js")
+
+    assert [(row["collected_at"], row["download_count"]) for row in rows] == [
+        ("2026-07-01T00:00:00Z", 0),
+        ("2026-07-03T00:00:00Z", 11),
+        ("2026-07-04T00:00:00Z", 11),
+    ]
