@@ -7,7 +7,6 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
-import requests
 
 from collector import collect_repo, configured_repos
 from config import load_env
@@ -134,7 +133,7 @@ def collect_repos(repos: Iterable[str], db_path: str) -> None:
     for repo in repos:
         try:
             collect_repo(repo, db_path)
-        except requests.HTTPError:
+        except Exception:
             log.exception("Failed to collect %s", repo)
 
 

@@ -76,3 +76,20 @@ def test_repos_with_no_anchor_use_independent_fallback_due_time():
 
     assert next_due["owner/repo-a"][0] == dt("2026-07-03T08:17:00Z")
     assert next_due["owner/repo-b"] == (dt("2026-07-03T09:00:00Z"), dt("2026-07-03T09:00:00Z"))
+
+
+def test_collect_repos_continues_after_transient_error(monkeypatch):
+    from scheduler import collect_repos
+
+    calls = []
+
+    def fake_collect_repo(repo: str, db_path: str) -> None:
+        calls.append((repo, db_path))
+        if repo == "owner/repo-a":
+            raise RuntimeError("temporary failure")
+
+    monkeypatch.setattr("scheduler.collect_repo", fake_collect_repo)
+
+    collect_repos(["owner/repo-a", "owner/repo-b"], "analytics.sqlite3")
+
+    assert calls == [("owner/repo-a", "analytics.sqlite3"), ("owner/repo-b", "analytics.sqlite3")]
