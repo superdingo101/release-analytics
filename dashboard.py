@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import os
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from config import load_env
@@ -73,7 +74,48 @@ st.bar_chart(pd.DataFrame(totals).set_index("tag")["downloads"] if totals else p
 
 st.subheader("Cumulative downloads by release age")
 age_df = df.sort_values("release_age_hours")[["tag", "release_age_days", "download_count"]]
-st.line_chart(age_df, x="release_age_days", y="download_count", color="tag")
+max_release_age_days = float(age_df["release_age_days"].max()) if not age_df.empty else 0.0
+if "release_age_days_limit" not in st.session_state:
+    st.session_state.release_age_days_limit = max_release_age_days
+
+if st.session_state.release_age_days_limit > max_release_age_days:
+    st.session_state.release_age_days_limit = max_release_age_days
+
+limit_col, reset_col = st.columns([3, 1])
+with limit_col:
+    release_age_days_limit = st.number_input(
+        "Show release age through day",
+        min_value=0.0,
+        max_value=max_release_age_days,
+        value=st.session_state.release_age_days_limit,
+        step=1.0,
+        format="%.2f",
+        key="release_age_days_limit",
+        help="Limits the chart view without changing the stored release_age_days values.",
+    )
+with reset_col:
+    st.write("")
+    st.write("")
+    if st.button("Reset view", use_container_width=True):
+        st.session_state.release_age_days_limit = max_release_age_days
+        st.rerun()
+
+filtered_age_df = age_df[age_df["release_age_days"] <= release_age_days_limit]
+age_chart = (
+    alt.Chart(filtered_age_df)
+    .mark_line()
+    .encode(
+        x=alt.X("release_age_days:Q", title="release_age_days"),
+        y=alt.Y("download_count:Q", title="download_count"),
+        color=alt.Color("tag:N", title="tag"),
+        tooltip=[
+            alt.Tooltip("tag:N", title="tag"),
+            alt.Tooltip("release_age_days:Q", title="release_age_days", format=".2f"),
+            alt.Tooltip("download_count:Q", title="download_count"),
+        ],
+    )
+)
+st.altair_chart(age_chart, use_container_width=True)
 
 st.subheader("Daily downloads by version")
 daily = df.copy()
