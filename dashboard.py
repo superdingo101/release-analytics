@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import timedelta
 import os
 
-import altair as alt
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from config import load_env
 
@@ -190,25 +190,31 @@ set_query_param("release_age_days_limit", f"{release_age_days_limit:.2f}")
 filtered_age_df = chart_age_df[chart_age_df["release_age_days"] <= release_age_days_limit]
 visible_release_tags = set(filtered_age_df["tag"])
 active_release_tags = [tag for tag in release_order["tag"] if tag in visible_release_tags]
-age_chart = (
-    alt.Chart(filtered_age_df)
-    .mark_line()
-    .encode(
-        x=alt.X("release_age_days:Q", title="release_age_days"),
-        y=alt.Y("download_count:Q", title="download_count"),
-        color=alt.Color(
-            "tag:N",
-            title="tag",
-            scale=alt.Scale(domain=active_release_tags),
-        ),
-        tooltip=[
-            alt.Tooltip("tag:N", title="tag"),
-            alt.Tooltip("release_age_days:Q", title="release_age_days", format=".2f"),
-            alt.Tooltip("download_count:Q", title="download_count"),
-        ],
-    )
+age_chart = px.line(
+    filtered_age_df,
+    x="release_age_days",
+    y="download_count",
+    color="tag",
+    category_orders={"tag": active_release_tags},
+    labels={
+        "release_age_days": "Release age (days)",
+        "download_count": "Downloads",
+        "tag": "Release",
+    },
+    hover_data={
+        "release_age_days": ":.2f",
+        "download_count": ":,",
+    },
 )
-st.altair_chart(age_chart, use_container_width=True)
+age_chart.update_layout(
+    hovermode="x unified",
+    legend_title_text="Release",
+)
+st.plotly_chart(
+    age_chart,
+    use_container_width=True,
+    config={"displaylogo": False, "responsive": True},
+)
 
 st.subheader("Daily downloads by version")
 daily = chart_df.copy()
