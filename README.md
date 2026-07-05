@@ -149,7 +149,7 @@ Dashboard sections:
 
 - **KPI cards** show latest stable release downloads, previous stable release downloads, current-vs-previous adoption percentage, and downloads added over the last 24 hours / 7 days.
 - **Total downloads by release** compares latest cumulative asset downloads per release.
-- **Cumulative downloads by release age** overlays versions by days since publication, useful for adoption curves. Enable **Only show releases until superseded** to stop each release line when the next selected release was published; the x-axis automatically rescales when toggled on, and **Show release age through day** can still cap the displayed range. Use **Reset view** to restore the active full range.
+- **Cumulative downloads by release age** overlays versions by days since publication, useful for adoption curves. Enable **Only show releases until superseded** to stop each release line when the next selected release was published; the x-axis automatically rescales when toggled on, and **Show release age through day** can still cap the displayed range. The legend only lists releases that still have visible data in the current view. Use **Reset view** to restore the active full range.
 - **Daily downloads by version** shows downloads added per day from snapshot deltas.
 - **Release comparison milestones** reports 24h, 72h, 7d, and 14d totals using snapshots at or shortly after each cutoff, so release-aligned samples collected a few minutes late still count without treating far-late samples as exact milestones.
 - **Events / annotations** displays rows from the `events` table for notes such as blog posts, docs launches, Reddit posts, or social announcements.
