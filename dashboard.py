@@ -17,6 +17,25 @@ DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
 st.set_page_config(page_title="Release Download Analytics", layout="wide")
 st.title("Release Download Analytics")
 
+
+def query_param_first(name: str, default: str | None = None) -> str | None:
+    values = st.query_params.get_all(name)
+    return values[0] if values else default
+
+
+def set_query_param(name: str, value: str | list[str] | None) -> None:
+    if value is None or value == []:
+        st.query_params.pop(name, None)
+    else:
+        st.query_params[name] = value
+
+
+def bool_query_param(name: str, default: bool) -> bool:
+    value = query_param_first(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
 @st.cache_data(ttl=60)
 def repos(db_path: str) -> list[str]:
     with connect(db_path) as conn:
@@ -29,8 +48,12 @@ if not repo_names:
     st.info("No data yet. Run collector.py or import_history.py first.")
     st.stop()
 
-repo = st.sidebar.selectbox("Repository", repo_names)
-include_prereleases = st.sidebar.toggle("Include prereleases", value=True)
+repo_param = query_param_first("repo")
+repo_index = repo_names.index(repo_param) if repo_param in repo_names else 0
+repo = st.sidebar.selectbox("Repository", repo_names, index=repo_index)
+set_query_param("repo", repo)
+include_prereleases = st.sidebar.toggle("Include prereleases", value=bool_query_param("include_prereleases", True))
+set_query_param("include_prereleases", "1" if include_prereleases else "0")
 with connect(db_path) as conn:
     asset_names = [r["name"] for r in fetch_rows(conn, """
         SELECT DISTINCT a.name FROM assets a
@@ -39,8 +62,11 @@ with connect(db_path) as conn:
         WHERE rp.full_name = ? ORDER BY a.name
     """, [repo])]
 
+asset_param = query_param_first("asset")
 default_index = asset_names.index("skylight-calendar-card.js") if "skylight-calendar-card.js" in asset_names else 0
-asset_name = st.sidebar.selectbox("Asset", asset_names, index=default_index)
+asset_index = asset_names.index(asset_param) if asset_param in asset_names else default_index
+asset_name = st.sidebar.selectbox("Asset", asset_names, index=asset_index)
+set_query_param("asset", asset_name)
 with connect(db_path) as conn:
     rows = snapshots_for_repo(conn, repo, include_prereleases, asset_name)
 if not rows:
@@ -51,7 +77,15 @@ df = pd.DataFrame(downloads_added_between_snapshots(rows))
 df["collected_at"] = pd.to_datetime(df["collected_at"], utc=True)
 df["published_at"] = pd.to_datetime(df["published_at"], utc=True)
 min_date, max_date = df["collected_at"].min().date(), df["collected_at"].max().date()
-start, end = st.sidebar.date_input("Snapshot date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+start_param = pd.to_datetime(query_param_first("start"), errors="coerce")
+end_param = pd.to_datetime(query_param_first("end"), errors="coerce")
+default_start = start_param.date() if not pd.isna(start_param) and min_date <= start_param.date() <= max_date else min_date
+default_end = end_param.date() if not pd.isna(end_param) and min_date <= end_param.date() <= max_date else max_date
+if default_start > default_end:
+    default_start, default_end = min_date, max_date
+start, end = st.sidebar.date_input("Snapshot date range", value=(default_start, default_end), min_value=min_date, max_value=max_date)
+set_query_param("start", start.isoformat())
+set_query_param("end", end.isoformat())
 df = df[(df["collected_at"].dt.date >= start) & (df["collected_at"].dt.date <= end)]
 
 with connect(db_path) as conn:
@@ -69,11 +103,29 @@ c2.metric(f"Previous release ({previous['tag']})", f"{previous['downloads']:,}")
 c3.metric("Current adoption", "n/a" if adoption is None else f"{adoption:.1f}%")
 c4.metric("Downloads 24h / 7d", f"{int(last_24h):,} / {int(last_7d):,}")
 
+available_releases = (
+    df[["tag", "published_at"]]
+    .drop_duplicates()
+    .sort_values(["published_at", "tag"], ascending=[False, True])["tag"]
+    .tolist()
+)
+selected_release_params = st.query_params.get_all("release")
+default_releases = [tag for tag in selected_release_params if tag in available_releases] or available_releases
+selected_releases = st.multiselect(
+    "Releases shown on charts",
+    available_releases,
+    default=default_releases,
+    help="Select each release independently. These choices are saved in the browser URL and survive refreshes.",
+)
+set_query_param("release", selected_releases)
+chart_df = df[df["tag"].isin(selected_releases)]
+chart_totals = [total for total in totals if total["tag"] in selected_releases]
+
 st.subheader("Total downloads by release")
-st.bar_chart(pd.DataFrame(totals).set_index("tag")["downloads"] if totals else pd.Series(dtype=int))
+st.bar_chart(pd.DataFrame(chart_totals).set_index("tag")["downloads"] if chart_totals else pd.Series(dtype=int))
 
 st.subheader("Cumulative downloads by release age")
-age_df = df.sort_values("release_age_hours")[["tag", "published_at", "collected_at", "release_age_days", "download_count"]]
+age_df = chart_df.sort_values("release_age_hours")[["tag", "published_at", "collected_at", "release_age_days", "download_count"]]
 release_order = (
     age_df[["tag", "published_at"]]
     .drop_duplicates()
@@ -85,17 +137,19 @@ age_df = age_df.merge(release_order[["tag", "superseded_at"]], on="tag", how="le
 
 limit_to_before_superseded = st.toggle(
     "Only show releases until superseded",
-    value=False,
+    value=bool_query_param("limit_to_before_superseded", False),
     help="When enabled, each release line stops at the next selected release's publication time.",
 )
+set_query_param("limit_to_before_superseded", "1" if limit_to_before_superseded else "0")
 superseded_age_df = age_df[
     age_df["superseded_at"].isna() | (age_df["collected_at"] < age_df["superseded_at"])
 ]
 chart_age_df = superseded_age_df if limit_to_before_superseded else age_df
 max_release_age_days = float(chart_age_df["release_age_days"].max()) if not chart_age_df.empty else 0.0
 
+age_limit_param = pd.to_numeric(query_param_first("release_age_days_limit"), errors="coerce")
 if "release_age_days_limit" not in st.session_state:
-    st.session_state.release_age_days_limit = max_release_age_days
+    st.session_state.release_age_days_limit = float(age_limit_param) if not pd.isna(age_limit_param) else max_release_age_days
 if "limit_to_before_superseded_previous" not in st.session_state:
     st.session_state.limit_to_before_superseded_previous = limit_to_before_superseded
 if st.session_state.limit_to_before_superseded_previous != limit_to_before_superseded:
@@ -132,6 +186,7 @@ with reset_col:
         args=(max_release_age_days,),
     )
 
+set_query_param("release_age_days_limit", f"{release_age_days_limit:.2f}")
 filtered_age_df = chart_age_df[chart_age_df["release_age_days"] <= release_age_days_limit]
 visible_release_tags = set(filtered_age_df["tag"])
 active_release_tags = [tag for tag in release_order["tag"] if tag in visible_release_tags]
@@ -156,13 +211,14 @@ age_chart = (
 st.altair_chart(age_chart, use_container_width=True)
 
 st.subheader("Daily downloads by version")
-daily = df.copy()
+daily = chart_df.copy()
 daily["day"] = daily["collected_at"].dt.date
 daily = daily.groupby(["day", "tag"], as_index=False)["downloads_added"].sum()
 st.bar_chart(daily, x="day", y="downloads_added", color="tag")
 
 st.subheader("Release comparison milestones")
-st.dataframe(pd.DataFrame(milestone_download_totals(rows)), use_container_width=True)
+milestone_rows = [row for row in rows if row["tag"] in selected_releases]
+st.dataframe(pd.DataFrame(milestone_download_totals(milestone_rows)), use_container_width=True)
 
 st.subheader("Events / annotations")
 with connect(db_path) as conn:
