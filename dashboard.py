@@ -188,13 +188,19 @@ with reset_col:
 
 set_query_param("release_age_days_limit", f"{release_age_days_limit:.2f}")
 filtered_age_df = chart_age_df[chart_age_df["release_age_days"] <= release_age_days_limit]
+visible_release_tags = set(filtered_age_df["tag"])
+active_release_tags = [tag for tag in release_order["tag"] if tag in visible_release_tags]
 age_chart = (
     alt.Chart(filtered_age_df)
     .mark_line()
     .encode(
         x=alt.X("release_age_days:Q", title="release_age_days"),
         y=alt.Y("download_count:Q", title="download_count"),
-        color=alt.Color("tag:N", title="tag"),
+        color=alt.Color(
+            "tag:N",
+            title="tag",
+            scale=alt.Scale(domain=active_release_tags),
+        ),
         tooltip=[
             alt.Tooltip("tag:N", title="tag"),
             alt.Tooltip("release_age_days:Q", title="release_age_days", format=".2f"),
