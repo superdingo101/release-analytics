@@ -1,5 +1,5 @@
 requests>=2.32
 streamlit>=1.36
-altair>=5
+plotly>=5.22
 pandas>=2.2
 pytest>=8.2
