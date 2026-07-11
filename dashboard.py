@@ -201,18 +201,25 @@ age_chart = px.line(
     y="download_count",
     color="tag",
     category_orders={"tag": active_release_tags},
-    hover_data={
-        "tag": True,
-        "release_age_days": ":.2f",
-        "download_count": True,
-    },
     labels={
-        "release_age_days": "release_age_days",
-        "download_count": "download_count",
-        "tag": "tag",
+        "release_age_days": "Release age (days)",
+        "download_count": "Downloads",
+        "tag": "Release",
+    },
+    hover_data={
+        "release_age_days": ":.2f",
+        "download_count": ":,",
     },
 )
-st.plotly_chart(age_chart, use_container_width=True)
+age_chart.update_layout(
+    hovermode="x unified",
+    legend_title_text="Release",
+)
+st.plotly_chart(
+    age_chart,
+    use_container_width=True,
+    config={"displaylogo": False, "responsive": True},
+)
 
 st.subheader("Daily downloads by version")
 daily = chart_df.copy()
