@@ -112,10 +112,15 @@ available_releases = (
 selected_release_params = st.query_params.get_all("release")
 default_releases = [tag for tag in selected_release_params if tag in available_releases] or available_releases
 selected_releases = st.multiselect(
-    "Releases shown on charts",
+    "Releases shown on other charts and tables",
     available_releases,
     default=default_releases,
-    help="Select each release independently. These choices are saved in the browser URL and survive refreshes.",
+    help=(
+        "Select releases for the total downloads, daily downloads, and milestone sections. "
+        "The cumulative release-age chart always includes all releases from the repo, asset, "
+        "prerelease, and date filters so its Plotly legend can show/hide releases interactively "
+        "without rerunning the page. These choices are saved in the browser URL and survive refreshes."
+    ),
 )
 set_query_param("release", selected_releases)
 chart_df = df[df["tag"].isin(selected_releases)]
@@ -125,7 +130,7 @@ st.subheader("Total downloads by release")
 st.bar_chart(pd.DataFrame(chart_totals).set_index("tag")["downloads"] if chart_totals else pd.Series(dtype=int))
 
 st.subheader("Cumulative downloads by release age")
-age_df = chart_df.sort_values("release_age_hours")[["tag", "published_at", "collected_at", "release_age_days", "download_count"]]
+age_df = df.sort_values("release_age_hours")[["tag", "published_at", "collected_at", "release_age_days", "download_count"]]
 release_order = (
     age_df[["tag", "published_at"]]
     .drop_duplicates()
@@ -138,7 +143,7 @@ age_df = age_df.merge(release_order[["tag", "superseded_at"]], on="tag", how="le
 limit_to_before_superseded = st.toggle(
     "Only show releases until superseded",
     value=bool_query_param("limit_to_before_superseded", False),
-    help="When enabled, each release line stops at the next selected release's publication time.",
+    help="When enabled, each release line stops at the next release's publication time.",
 )
 set_query_param("limit_to_before_superseded", "1" if limit_to_before_superseded else "0")
 superseded_age_df = age_df[
