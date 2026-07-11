@@ -3,3 +3,4 @@ streamlit>=1.36
 altair>=5
 pandas>=2.2
 pytest>=8.2
+plotly>=5.22
