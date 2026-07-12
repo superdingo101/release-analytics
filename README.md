@@ -65,6 +65,7 @@ Configure the container with `.env` and Compose environment values:
 | `GITHUB_TOKEN` | empty | Optional GitHub token for higher API rate limits. |
 | `DB_PATH` | `/data/release_analytics.sqlite3` in Docker | SQLite database path. Keep this under `/data` in Docker so it is persisted. |
 | `LOG_LEVEL` | `INFO` | Python logging level. |
+| `EXCLUDED_RELEASE_TAGS` | empty | Optional comma-separated release tags to omit from dashboard metrics, charts, tables, and release selectors. `HIDDEN_RELEASES` is also accepted as a fallback alias. |
 | `RUN_INTERVAL_SECONDS` | `21600` | Web-mode collection cadence in seconds, anchored to each tracked release `published_at` time after releases are known. |
 | `COLLECT_ON_START` | `true` | Run the collector once on startup before release-aligned scheduling begins, helping discover new releases immediately. |
 | `STREAMLIT_SERVER_ADDRESS` | `0.0.0.0` | Streamlit bind address inside the container. |
@@ -144,13 +145,13 @@ Dashboard controls:
 - **Asset selector** defaults to `skylight-calendar-card.js` when present.
 - **Prerelease toggle** includes or excludes prereleases.
 - **Date range filter** limits snapshots used for charts.
-- **Releases shown on other charts and tables** selects releases for the total downloads, daily downloads, and milestone sections; the cumulative release-age chart always includes all releases matching the repository, asset, prerelease, and date filters and can be narrowed interactively with its Plotly legend. Dashboard selections are mirrored into the browser URL so refreshes keep the same repository, asset, date, release, and chart-view settings.
+- **Releases shown on other charts and tables** selects releases for the total downloads, daily downloads, and milestone sections. Tags listed in `EXCLUDED_RELEASE_TAGS` (or fallback alias `HIDDEN_RELEASES`) are removed from the selector entirely and are also omitted from KPI totals, total downloads, daily downloads, milestone rows, and the cumulative release-age chart. The cumulative release-age chart includes all non-hidden releases matching the repository, asset, prerelease, and date filters and can be narrowed interactively with its Plotly legend. Dashboard selections are mirrored into the browser URL so refreshes keep the same repository, asset, date, release, and chart-view settings.
 
 Dashboard sections:
 
 - **KPI cards** show latest stable release downloads, previous stable release downloads, current-vs-previous adoption percentage, and downloads added over the last 24 hours / 7 days.
 - **Total downloads by release** compares latest cumulative asset downloads per selected release.
-- **Cumulative downloads by release age** overlays all versions matching the repository, asset, prerelease, and date filters by days since publication, useful for adoption curves. Use the Plotly legend to click or double-click release traces on and off without rerunning the page. Enable **Only show releases until superseded** to stop each release line when the next release was published; the x-axis automatically rescales when toggled on, and **Show release age through day** can still cap the displayed range. Use **Reset view** to restore the active full range.
+- **Cumulative downloads by release age** overlays all non-hidden versions matching the repository, asset, prerelease, and date filters by days since publication, useful for adoption curves. Use the Plotly legend to click or double-click release traces on and off without rerunning the page. Enable **Only show releases until superseded** to stop each release line when the next release was published; the x-axis automatically rescales when toggled on, and **Show release age through day** can still cap the displayed range. Use **Reset view** to restore the active full range.
 - **Daily downloads by version** shows downloads added per day from snapshot deltas for selected releases.
 - **Release comparison milestones** reports 24h, 72h, 7d, and 14d totals for selected releases using snapshots at or shortly after each cutoff, so release-aligned samples collected a few minutes late still count without treating far-late samples as exact milestones.
 - **Events / annotations** displays rows from the `events` table for notes such as blog posts, docs launches, Reddit posts, or social announcements.

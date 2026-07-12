@@ -8,8 +8,9 @@ import types
 import pytest
 
 from collector import collect_repo, configured_repos, fetch_releases
-from config import load_env
+from config import comma_separated_env, hidden_release_tags, load_env
 from db import (
+    asset_names_for_repo,
     connect,
     current_adoption_percentage,
     downloads_added_between_snapshots,
@@ -53,6 +54,21 @@ def test_load_env_ignores_comments_and_preserves_existing_env(tmp_path, monkeypa
     assert configured_repos() == ["owner/repo", "other/repo"]
     assert os.environ["QUOTED"] == "hello world"
     assert os.environ["EXISTING"] == "already-set"
+
+
+def test_hidden_release_tags_supports_primary_and_legacy_env_names(monkeypatch):
+    monkeypatch.setenv("EXCLUDED_RELEASE_TAGS", " v1.0.0,\nv1.1.0 ,, v2.0.0 ")
+    monkeypatch.setenv("HIDDEN_RELEASES", "ignored")
+
+    assert comma_separated_env("EXCLUDED_RELEASE_TAGS") == ["v1.0.0", "v1.1.0", "v2.0.0"]
+    assert hidden_release_tags() == {"v1.0.0", "v1.1.0", "v2.0.0"}
+
+
+def test_hidden_release_tags_falls_back_to_hidden_releases(monkeypatch):
+    monkeypatch.delenv("EXCLUDED_RELEASE_TAGS", raising=False)
+    monkeypatch.setenv("HIDDEN_RELEASES", " v0.9.0, v0.9.1 ")
+
+    assert hidden_release_tags() == {"v0.9.0", "v0.9.1"}
 
 
 def test_configured_repos_splits_commas_and_newlines(monkeypatch):
@@ -127,6 +143,17 @@ def test_init_db_deduplicates_legacy_duplicate_assets(tmp_path):
 
     assert len(assets) == 1
     assert [row["download_count"] for row in snapshots] == [5, 10]
+
+
+def test_asset_names_for_repo_omits_assets_only_on_hidden_releases(tmp_path):
+    with connect(tmp_path / "analytics.sqlite3") as conn:
+        init_db(conn)
+        seed_release(conn, tag="v1", asset="visible.js")
+        seed_release(conn, tag="v-hidden", asset="aaa-hidden-only.js")
+
+        asset_names = asset_names_for_repo(conn, "owner/repo", {"v-hidden"})
+
+    assert asset_names == ["visible.js"]
 
 
 def test_snapshot_queries_filter_prerelease_drafts_and_assets(tmp_path):

@@ -195,6 +195,25 @@ def fetch_rows(conn: sqlite3.Connection, query: str, params: Iterable[Any] = ())
     return [dict(row) for row in conn.execute(query, tuple(params)).fetchall()]
 
 
+def asset_names_for_repo(conn: sqlite3.Connection, repo_full_name: str, hidden_release_tags: Iterable[str] = ()) -> list[str]:
+    """Return asset names for visible releases in a repository."""
+    params: list[Any] = [repo_full_name]
+    filters = ["rp.full_name = ?"]
+    hidden_tags = list(hidden_release_tags)
+    if hidden_tags:
+        filters.append(f"r.tag NOT IN ({', '.join('?' for _ in hidden_tags)})")
+        params.extend(hidden_tags)
+    rows = fetch_rows(conn, f"""
+        SELECT DISTINCT a.name
+        FROM assets a
+        JOIN releases r ON r.id = a.release_id
+        JOIN repos rp ON rp.id = r.repo_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY a.name
+    """, params)
+    return [row["name"] for row in rows]
+
+
 def snapshots_for_repo(conn: sqlite3.Connection, repo_full_name: str, include_prereleases: bool = True, asset_name: str | None = None) -> list[dict[str, Any]]:
     params: list[Any] = [repo_full_name]
     filters = ["rp.full_name = ?", "r.draft = 0"]
