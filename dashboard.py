@@ -7,12 +7,13 @@ import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from config import load_env
+from config import hidden_release_tags, load_env
 
 from db import DB_PATH, connect, current_adoption_percentage, downloads_added_between_snapshots, fetch_rows, init_db, milestone_download_totals, snapshots_for_repo, total_downloads_by_release
 
 load_env()
 DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
+HIDDEN_RELEASE_TAGS = hidden_release_tags()
 
 st.set_page_config(page_title="Release Download Analytics", layout="wide")
 st.title("Release Download Analytics")
@@ -69,8 +70,10 @@ asset_name = st.sidebar.selectbox("Asset", asset_names, index=asset_index)
 set_query_param("asset", asset_name)
 with connect(db_path) as conn:
     rows = snapshots_for_repo(conn, repo, include_prereleases, asset_name)
+if HIDDEN_RELEASE_TAGS:
+    rows = [row for row in rows if row["tag"] not in HIDDEN_RELEASE_TAGS]
 if not rows:
-    st.warning("No snapshots match the selected filters.")
+    st.warning("No snapshots match the selected filters after excluding hidden releases.")
     st.stop()
 
 df = pd.DataFrame(downloads_added_between_snapshots(rows))
@@ -89,7 +92,11 @@ set_query_param("end", end.isoformat())
 df = df[(df["collected_at"].dt.date >= start) & (df["collected_at"].dt.date <= end)]
 
 with connect(db_path) as conn:
-    totals = total_downloads_by_release(conn, repo, include_prereleases, asset_name)
+    totals = [
+        total
+        for total in total_downloads_by_release(conn, repo, include_prereleases, asset_name)
+        if total["tag"] not in HIDDEN_RELEASE_TAGS
+    ]
 latest = totals[0] if totals else {"downloads": 0, "tag": "n/a"}
 previous = totals[1] if len(totals) > 1 else {"downloads": 0, "tag": "n/a"}
 adoption = current_adoption_percentage(totals)
@@ -117,7 +124,9 @@ selected_releases = st.multiselect(
     default=default_releases,
     help=(
         "Select releases for the total downloads, daily downloads, and milestone sections. "
-        "The cumulative release-age chart always includes all releases from the repo, asset, "
+        "Releases configured in EXCLUDED_RELEASE_TAGS or HIDDEN_RELEASES are omitted from "
+        "dashboard metrics, charts, tables, and this selector. "
+        "The cumulative release-age chart always includes all non-hidden releases from the repo, asset, "
         "prerelease, and date filters so its Plotly legend can show/hide releases interactively "
         "without rerunning the page. These choices are saved in the browser URL and survive refreshes."
     ),
