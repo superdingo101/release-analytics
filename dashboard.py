@@ -9,7 +9,7 @@ import plotly.express as px
 import streamlit as st
 from config import hidden_release_tags, load_env
 
-from db import DB_PATH, connect, current_adoption_percentage, downloads_added_between_snapshots, fetch_rows, init_db, milestone_download_totals, snapshots_for_repo, total_downloads_by_release
+from db import DB_PATH, asset_names_for_repo, connect, current_adoption_percentage, downloads_added_between_snapshots, fetch_rows, init_db, milestone_download_totals, snapshots_for_repo, total_downloads_by_release
 
 load_env()
 DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
@@ -56,12 +56,7 @@ set_query_param("repo", repo)
 include_prereleases = st.sidebar.toggle("Include prereleases", value=bool_query_param("include_prereleases", True))
 set_query_param("include_prereleases", "1" if include_prereleases else "0")
 with connect(db_path) as conn:
-    asset_names = [r["name"] for r in fetch_rows(conn, """
-        SELECT DISTINCT a.name FROM assets a
-        JOIN releases r ON r.id = a.release_id
-        JOIN repos rp ON rp.id = r.repo_id
-        WHERE rp.full_name = ? ORDER BY a.name
-    """, [repo])]
+    asset_names = asset_names_for_repo(conn, repo, HIDDEN_RELEASE_TAGS)
 
 asset_param = query_param_first("asset")
 default_index = asset_names.index("skylight-calendar-card.js") if "skylight-calendar-card.js" in asset_names else 0

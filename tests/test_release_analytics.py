@@ -10,6 +10,7 @@ import pytest
 from collector import collect_repo, configured_repos, fetch_releases
 from config import comma_separated_env, hidden_release_tags, load_env
 from db import (
+    asset_names_for_repo,
     connect,
     current_adoption_percentage,
     downloads_added_between_snapshots,
@@ -142,6 +143,17 @@ def test_init_db_deduplicates_legacy_duplicate_assets(tmp_path):
 
     assert len(assets) == 1
     assert [row["download_count"] for row in snapshots] == [5, 10]
+
+
+def test_asset_names_for_repo_omits_assets_only_on_hidden_releases(tmp_path):
+    with connect(tmp_path / "analytics.sqlite3") as conn:
+        init_db(conn)
+        seed_release(conn, tag="v1", asset="visible.js")
+        seed_release(conn, tag="v-hidden", asset="aaa-hidden-only.js")
+
+        asset_names = asset_names_for_repo(conn, "owner/repo", {"v-hidden"})
+
+    assert asset_names == ["visible.js"]
 
 
 def test_snapshot_queries_filter_prerelease_drafts_and_assets(tmp_path):
