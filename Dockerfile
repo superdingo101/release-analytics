@@ -14,6 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY collector.py config.py dashboard.py db.py import_history.py scheduler.py docker-entrypoint.sh ./
 
+# Normalize shell line endings even when the build context came from Windows.
+RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
+
 VOLUME ["/data"]
 EXPOSE 8501
 
