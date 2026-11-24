@@ -55,6 +55,14 @@ GitHub exposes only the **current cumulative** download count for each release a
 
 The default container mode starts Streamlit and runs the collector scheduler in the background. By default, a collection happens immediately on startup so newly published releases are discovered. Future web-mode collections are release-time aligned: `RUN_INTERVAL_SECONDS` still controls the cadence, but each repository schedule is anchored to its latest tracked non-draft release `published_at` time. With the Compose default of `21600` seconds, a release published at 02:17 UTC is polled at 08:17, 14:17, 20:17, and so on. Each configured repository keeps its own aligned schedule; when multiple repositories are configured, the scheduler sleeps until the earliest repo due time and collects only repos due in that wake cycle. If the database has no known release rows yet, the scheduler falls back to the previous fixed interval behavior until a release is discovered.
 
+## Web management
+
+Open **Settings** in the sidebar to configure tracked repositories, globally excluded release tags, collection cadence, and collection on startup. Settings are stored in the same SQLite volume as your data and override the corresponding environment defaults after saving. An empty tracked list pauses collection without deleting history. Adding a repository queues its first collection automatically. The scheduler checks for changes and manual requests every five seconds (after any in-progress collection completes).
+
+The sidebar shows the selected repository's last successful scheduler collection, next scheduled collection, and queued/running/error state. Use **Collect now** to request an immediate collection without interrupting the existing release-aligned schedule; **Refresh collection status** updates the display. CLI collections and imported history do not update scheduler status. Settings and manual collection manage the configured DB_PATH, not alternate databases opened for viewing.
+
+Settings also supports pasting historical snapshot text and creating, editing, or deleting repository annotations. GitHub credentials, logging, and server binding remain environment configuration. The dashboard has no built-in authentication: expose it only to trusted users or behind an authenticated reverse proxy.
+
 ## Runtime configuration
 
 Configure the container with `.env` and Compose environment values:

@@ -75,7 +75,13 @@ def main() -> None:
     parser.add_argument("--include-drafts", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
-    repos = args.repo or configured_repos()
+    if args.repo:
+        repos = args.repo
+    else:
+        from management import read_settings
+        with connect(args.db) as conn:
+            init_db(conn)
+            repos = read_settings(conn).repos
     if not repos:
         raise SystemExit("No repositories configured. Set REPOS or pass --repo owner/name.")
     for repo in repos:

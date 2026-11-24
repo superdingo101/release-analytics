@@ -70,6 +70,21 @@ def init_db(conn: sqlite3.Connection) -> None:
             UNIQUE(asset_id, collected_at)
         );
 
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS collection_status (
+            repo TEXT PRIMARY KEY,
+            pending INTEGER NOT NULL DEFAULT 0,
+            running INTEGER NOT NULL DEFAULT 0,
+            last_attempt TEXT,
+            last_success TEXT,
+            next_due TEXT,
+            error TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo_id INTEGER REFERENCES repos(id) ON DELETE CASCADE,
