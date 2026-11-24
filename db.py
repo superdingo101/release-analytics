@@ -66,6 +66,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             collected_at TEXT NOT NULL,
             download_count INTEGER NOT NULL CHECK(download_count >= 0),
             created_at TEXT NOT NULL,
+            is_synthetic INTEGER NOT NULL DEFAULT 0 CHECK(is_synthetic IN (0, 1)),
             UNIQUE(asset_id, collected_at)
         );
 
@@ -94,6 +95,38 @@ def init_db(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+    _migrate_snapshot_provenance(conn)
+
+
+def _migrate_snapshot_provenance(conn: sqlite3.Connection) -> None:
+    """Mark legacy backdated publication-zero anchors without deleting history."""
+    # Serialize the schema check and migration with other database users.
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(download_snapshots)")}
+        if "is_synthetic" in columns:
+            return
+        conn.execute(
+            "ALTER TABLE download_snapshots ADD COLUMN "
+            "is_synthetic INTEGER NOT NULL DEFAULT 0 CHECK(is_synthetic IN (0, 1))"
+        )
+        # Old databases have no provenance. A zero stored retroactively at
+        # publication time matches the collector's old synthetic anchor.
+        # A genuine historical zero imported at that exact time is ambiguous;
+        # keep the row so an explicit re-import can restore it as observed.
+        conn.execute(
+            """
+            UPDATE download_snapshots AS s
+            SET is_synthetic = 1
+            WHERE s.download_count = 0
+              AND julianday(s.created_at) > julianday(s.collected_at)
+              AND EXISTS (
+                  SELECT 1
+                  FROM assets a JOIN releases r ON r.id = a.release_id
+                  WHERE a.id = s.asset_id AND r.published_at = s.collected_at
+              )
+            """
+        )
 
 
 def _dedupe_assets(conn: sqlite3.Connection) -> None:
@@ -185,7 +218,11 @@ def insert_snapshot(conn: sqlite3.Connection, asset_id: int, collected_at: str, 
         """
         INSERT INTO download_snapshots(asset_id, collected_at, download_count, created_at)
         VALUES (?, ?, ?, ?)
-        ON CONFLICT(asset_id, collected_at) DO NOTHING
+        ON CONFLICT(asset_id, collected_at) DO UPDATE SET
+            download_count=excluded.download_count,
+            created_at=excluded.created_at,
+            is_synthetic=0
+        WHERE download_snapshots.is_synthetic = 1
         """,
         (asset_id, collected_at, int(download_count), now),
     )
@@ -216,7 +253,7 @@ def asset_names_for_repo(conn: sqlite3.Connection, repo_full_name: str, hidden_r
 
 def snapshots_for_repo(conn: sqlite3.Connection, repo_full_name: str, include_prereleases: bool = True, asset_name: str | None = None) -> list[dict[str, Any]]:
     params: list[Any] = [repo_full_name]
-    filters = ["rp.full_name = ?", "r.draft = 0"]
+    filters = ["rp.full_name = ?", "r.draft = 0", "s.is_synthetic = 0"]
     if not include_prereleases:
         filters.append("r.prerelease = 0")
     if asset_name:
@@ -249,7 +286,7 @@ def latest_snapshot_summary(conn: sqlite3.Connection, repo_full_name: str, inclu
             JOIN releases r ON r.id = a.release_id
             JOIN repos rp ON rp.id = r.repo_id
             JOIN download_snapshots s ON s.asset_id = a.id
-            WHERE rp.full_name = ? AND r.draft = 0 {prerelease_filter} {asset_filter}
+            WHERE rp.full_name = ? AND r.draft = 0 AND s.is_synthetic = 0 {prerelease_filter} {asset_filter}
             GROUP BY a.id
         )
         SELECT r.tag, r.published_at, r.prerelease, a.name AS asset_name, s.collected_at, s.download_count
