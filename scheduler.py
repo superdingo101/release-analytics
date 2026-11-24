@@ -159,23 +159,34 @@ def collect_managed_repo(conn, repo: str, db_path: str) -> bool:
 SETTINGS_POLL_SECONDS = 5
 
 
-def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings):
+def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings, outstanding):
     """One scheduler iteration; return the current settings for the next tick."""
     interval = settings.interval
     repos = settings.repos
     if previous_settings is not None and previous_settings.interval != interval:
         fallback.clear()
         last_nominal.clear()
+        outstanding.clear()
     for repo in set(fallback) - set(repos):
         fallback.pop(repo, None)
     for repo in set(last_nominal) - set(repos):
         last_nominal.pop(repo, None)
     anchors = latest_release_anchors(db_path, repos, initialize=False)
+    for repo in list(outstanding):
+        if repo not in repos or outstanding[repo][0] != anchors.get(repo):
+            outstanding.pop(repo)
     for repo in repos:
         if repo not in anchors:
             fallback.setdefault(repo, now + timedelta(seconds=interval))
     due_window = min(int(os.getenv("SCHEDULE_DUE_WINDOW_SECONDS", str(DEFAULT_DUE_WINDOW_SECONDS))), interval - 1)
     next_due = next_due_by_repo(repos, anchors, now, interval, fallback, last_nominal, due_window)
+    # Keep the previously announced slot until it is processed, even if a
+    # polling tick or a slow manual collection crosses the due window.
+    for repo, slot in next_due.items():
+        if repo in outstanding:
+            next_due[repo] = outstanding[repo][1]
+        else:
+            outstanding[repo] = (anchors.get(repo), slot)
     publish_due(conn, next_due)
     scheduled = set(due_repos(next_due, now, 0))
     requested = pending_repos(conn, repos)
@@ -187,6 +198,7 @@ def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previou
         if collect_managed_repo(conn, repo, db_path):
             if repo in scheduled:
                 last_nominal[repo] = next_due[repo][1]
+                outstanding.pop(repo, None)
             if repo not in anchors and repo in scheduled:
                 fallback[repo] = now + timedelta(seconds=interval)
     return settings
@@ -199,13 +211,14 @@ def run_collector_loop() -> None:
     fallback: dict[str, datetime] = {}
     last_nominal: dict[str, datetime] = {}
     previous_settings = None
+    outstanding: dict[str, tuple[datetime | None, tuple[datetime, datetime]]] = {}
     with closing(connect(db_path)) as conn:
         init_db(conn)
         recover_interrupted(conn)
         while True:
             now = datetime.now(timezone.utc).replace(microsecond=0)
             settings = read_settings(conn)
-            previous_settings = scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings)
+            previous_settings = scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings, outstanding)
             time.sleep(SETTINGS_POLL_SECONDS)
 
 

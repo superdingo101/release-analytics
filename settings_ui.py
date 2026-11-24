@@ -106,9 +106,19 @@ def render_settings(db_path: str) -> None:
     options = {event["id"]: event for event in events}
     chosen = st.selectbox("Annotation", [None, *options], format_func=lambda key: "New annotation" if key is None else f"{options[key]['title']} ({options[key]['occurred_at']})")
     event = options.get(chosen, {})
-    with st.form(f"annotation_{repo}_{chosen}"):
+    context = (repo, chosen)
+    # Streamlit includes widget defaults in its identity. Freeze the new
+    # timestamp for the lifetime of this form, including submit reruns.
+    if st.session_state.get("annotation_context") != context:
+        st.session_state.annotation_context = context
+        st.session_state.annotation_default_time = event.get("occurred_at") or utc_now_iso()
+        st.session_state.annotation_generation = st.session_state.get("annotation_generation", 0) + 1
+    generation = st.session_state.annotation_generation
+    with st.form(f"annotation_{repo}_{chosen}_{generation}"):
         title = st.text_input("Title", value=event.get("title", ""))
-        occurred = st.text_input("Date and time (ISO 8601 with timezone)", value=event.get("occurred_at", utc_now_iso()))
+        occurred = st.text_input("Date and time (ISO 8601 with timezone)",
+                                 value=st.session_state.annotation_default_time,
+                                 key=f"annotation_time_{generation}")
         tag = st.selectbox("Release (optional)", tags, index=tags.index(event.get("tag") or "") if (event.get("tag") or "") in tags else 0)
         notes = st.text_area("Notes", value=event.get("notes") or "")
         url = st.text_input("URL (optional)", value=event.get("url") or "")
@@ -116,6 +126,7 @@ def render_settings(db_path: str) -> None:
             try:
                 with closing(connect(db_path)) as conn:
                     save_annotation(conn, repo, occurred, title, notes, url, tag, chosen)
+                st.session_state.annotation_context = None
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
