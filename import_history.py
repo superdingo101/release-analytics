@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 from config import load_env
 
@@ -54,15 +55,30 @@ def parse_history(text: str) -> tuple[str, list[dict[str, object]]]:
     return collected_at, snapshots
 
 
+def _timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("Historical timestamps must include a timezone.")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def import_history(repo: str, text: str, db_path: str | None = None) -> int:
     collected_at, snapshots = parse_history(text)
+    collected_at = _timestamp(collected_at)
+    for snap in snapshots:
+        snap["published_at"] = _timestamp(str(snap["published_at"]))
+        if str(snap["published_at"]) > collected_at:
+            raise ValueError("A snapshot cannot precede release publication.")
     db_path = db_path or os.getenv("DB_PATH", DB_PATH)
     with connect(db_path) as conn:
         init_db(conn)
         repo_id = upsert_repo(conn, repo)
         for snap in snapshots:
-            release_id = upsert_release(conn, repo_id, str(snap["tag"]), str(snap["published_at"]), False, False, "")
-            asset_id = upsert_asset(conn, release_id, synthetic_asset_id(repo, str(snap["tag"]), str(snap["asset_name"])), str(snap["asset_name"]))
+            tag, name = str(snap["tag"]), str(snap["asset_name"])
+            release = conn.execute("SELECT id FROM releases WHERE repo_id=? AND tag=?", (repo_id, tag)).fetchone()
+            release_id = release["id"] if release else upsert_release(conn, repo_id, tag, str(snap["published_at"]), False, False, "")
+            asset = conn.execute("SELECT id FROM assets WHERE release_id=? AND name=?", (release_id, name)).fetchone()
+            asset_id = asset["id"] if asset else upsert_asset(conn, release_id, synthetic_asset_id(repo, tag, name), name)
             insert_snapshot(conn, asset_id, collected_at, int(snap["download_count"]))
         conn.commit()
     return len(snapshots)

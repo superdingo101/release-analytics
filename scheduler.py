@@ -112,13 +112,14 @@ def due_repos(next_due: dict[str, tuple[datetime, datetime]], now: datetime, due
     return [repo for repo, (due_at, _) in next_due.items() if due_at <= ready_at]
 
 
-def latest_release_anchors(db_path: str, repos: Iterable[str]) -> dict[str, datetime]:
+def latest_release_anchors(db_path: str, repos: Iterable[str], *, initialize: bool = True) -> dict[str, datetime]:
     """Load the latest non-draft release published_at for each configured repo."""
     repo_names = [repo.strip() for repo in repos if repo.strip()]
     if not repo_names:
         return {}
-    with connect(db_path) as conn:
-        init_db(conn)
+    with closing(connect(db_path)) as conn:
+        if initialize:
+            init_db(conn)
         rows = conn.execute(
             f"""
             SELECT rp.full_name, MAX(r.published_at) AS published_at
@@ -169,7 +170,7 @@ def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previou
         fallback.pop(repo, None)
     for repo in set(last_nominal) - set(repos):
         last_nominal.pop(repo, None)
-    anchors = latest_release_anchors(db_path, repos)
+    anchors = latest_release_anchors(db_path, repos, initialize=False)
     for repo in repos:
         if repo not in anchors:
             fallback.setdefault(repo, now + timedelta(seconds=interval))
@@ -186,7 +187,7 @@ def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previou
         if collect_managed_repo(conn, repo, db_path):
             if repo in scheduled:
                 last_nominal[repo] = next_due[repo][1]
-            if repo not in anchors:
+            if repo not in anchors and repo in scheduled:
                 fallback[repo] = now + timedelta(seconds=interval)
     return settings
 

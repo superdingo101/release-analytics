@@ -198,8 +198,9 @@ with limit_col:
     release_age_days_limit = st.number_input(
         "Show release age through day",
         min_value=0.0,
-        max_value=max_release_age_days,
+        max_value=max(0.01, max_release_age_days),
         value=st.session_state.release_age_days_limit,
+        disabled=max_release_age_days == 0.0,
         step=1.0,
         format="%.2f",
         key="release_age_days_limit",

@@ -102,3 +102,33 @@ def test_annotations_are_repository_scoped(database):
     assert len(fetch_rows(conn, "SELECT * FROM events")) == 1
     delete_annotation(conn, "owner/old", event["id"])
     assert not fetch_rows(conn, "SELECT * FROM events")
+
+
+def test_manual_collection_does_not_shift_existing_fallback(database, monkeypatch):
+    from datetime import timedelta
+    path, conn = database
+    monkeypatch.setattr("scheduler.collect_repo", lambda *args: None)
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    fallback, nominal = {}, {}
+    settings = read_settings(conn)
+    scheduler_tick(conn, path, now, settings, fallback, nominal, None)
+    due = fallback["owner/old"]
+    request_collection(conn, "owner/old")
+    scheduler_tick(conn, path, now + timedelta(minutes=5), settings, fallback, nominal, settings)
+    assert fallback["owner/old"] == due
+
+
+def test_history_import_preserves_live_release_and_asset_metadata(database):
+    from db import upsert_repo, upsert_release, upsert_asset, snapshots_for_repo
+    from import_history import import_history
+    path, conn = database
+    repo_id = upsert_repo(conn, "owner/old")
+    release_id = upsert_release(conn, repo_id, "v1", "2026-07-01T00:00:00Z", True, False, "https://example.com/v1")
+    asset_id = upsert_asset(conn, release_id, 123, "app.js")
+    conn.commit()
+    assert import_history("owner/old", "Current UTC time: 2026-07-02T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path) == 1
+    row = snapshots_for_repo(conn, "owner/old")[0]
+    assert (row["asset_id"], row["github_asset_id"], row["prerelease"], row["html_url"]) == (asset_id, 123, 1, "https://example.com/v1")
+    with pytest.raises(ValueError, match="precede"):
+        import_history("owner/old", "Current UTC time: 2026-06-30T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path)
+    assert len(snapshots_for_repo(conn, "owner/old")) == 1

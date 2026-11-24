@@ -43,7 +43,7 @@ def parse_tags(raw: str) -> tuple[str, ...]:
 def read_settings(conn: sqlite3.Connection) -> Settings:
     values = {row["key"]: json.loads(row["value"]) for row in conn.execute("SELECT key, value FROM app_settings")}
     return Settings(
-        tuple(values["repos"]) if "repos" in values else tuple(comma_separated_env("REPOS")),
+        tuple(values["repos"]) if "repos" in values else parse_repos(",".join(comma_separated_env("REPOS"))),
         tuple(values["excluded_tags"]) if "excluded_tags" in values else tuple(sorted(hidden_release_tags())),
         int(values["interval"]) if "interval" in values else int(os.getenv("RUN_INTERVAL_SECONDS", str(DEFAULT_INTERVAL))),
         bool(values["collect_on_start"]) if "collect_on_start" in values else os.getenv("COLLECT_ON_START", "true").lower() == "true",
@@ -140,6 +140,8 @@ def publish_due(conn: sqlite3.Connection, due: dict[str, tuple[datetime, datetim
 
 def save_annotation(conn: sqlite3.Connection, repo: str, occurred_at: str, title: str,
                     notes: str = "", url: str = "", tag: str = "", event_id: int | None = None) -> None:
+    if parse_repos(repo) != (repo,):
+        raise ValueError("Enter one valid repository.")
     title = title.strip()
     if not title:
         raise ValueError("Enter an annotation title.")

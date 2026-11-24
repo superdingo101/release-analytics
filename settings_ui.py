@@ -30,10 +30,13 @@ def render_collection_status(db_path: str, repo: str) -> None:
     if status.get("error"):
         st.sidebar.warning(status["error"])
     if st.sidebar.button("Collect now", disabled=not tracked or bool(status.get("pending") or status.get("running"))):
-        with closing(connect(db_path)) as conn:
-            request_collection(conn, repo)
-        st.rerun()
-    st.sidebar.button("Refresh collection status")
+        try:
+            with closing(connect(db_path)) as conn:
+                request_collection(conn, repo)
+            st.rerun()
+        except ValueError as exc:
+            st.sidebar.error(str(exc))
+    st.sidebar.button("Refresh collection status", on_click=st.cache_data.clear)
 
 
 def render_settings(db_path: str) -> None:
@@ -49,7 +52,7 @@ def render_settings(db_path: str) -> None:
         excluded = st.text_area("Excluded release tags (all repositories)", "\n".join(settings.excluded_tags),
                                 help="One exact release tag per line, or comma-separated. Hidden from all dashboard metrics and charts.")
         interval = st.number_input("Collection interval (seconds)", min_value=60, max_value=604800,
-                                   value=settings.interval, step=60, help="21600 seconds = 6 hours. Release-aligned scheduling is preserved.")
+                                   value=max(60, min(604800, settings.interval)), step=60, help="21600 seconds = 6 hours. Release-aligned scheduling is preserved.")
         startup = st.checkbox("Collect on startup", value=settings.collect_on_start)
         if st.form_submit_button("Save settings"):
             try:
