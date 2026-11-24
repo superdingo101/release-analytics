@@ -194,3 +194,7 @@ Indexes cover repository/tag lookup, GitHub asset IDs, snapshot collection time,
 ## Known limitation
 
 GitHub's releases API exposes cumulative **current** asset download counts only. Historical trend accuracy depends on how often you poll and store snapshots.
+
+The first observed count for each asset establishes its baseline: it contributes to cumulative totals, but not to daily or rolling 24h/7d increases. These metrics show changes between observed snapshots, assigned to the later snapshot's time; zero observed increases do not establish that no downloads occurred before monitoring began. Release-age charts and milestones likewise use observed counts only.
+
+On upgrade, legacy zero snapshots backdated to the release publication time are marked as synthetic and excluded from analytics without deleting rows. Older databases cannot distinguish these anchors from genuine historical zeros imported at the exact publication time. If you have a real observation at that timestamp, re-importing it restores it as an observed snapshot.

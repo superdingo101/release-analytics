@@ -61,7 +61,7 @@ def collect_repo(repo: str, db_path: str = DB_PATH, include_drafts: bool = False
             )
             for asset in release.get("assets", []):
                 asset_id = upsert_asset(conn, release_id, int(asset["id"]), asset["name"])
-                insert_snapshot(conn, asset_id, published_at, 0)
+                # The first observed cumulative count is the baseline, not a delta.
                 insert_snapshot(conn, asset_id, collected_at, int(asset.get("download_count", 0)))
                 log.info("Stored %s %s %s=%s", repo, release["tag_name"], asset["name"], asset.get("download_count", 0))
         conn.commit()
