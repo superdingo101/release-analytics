@@ -50,7 +50,7 @@ def read_settings(conn: sqlite3.Connection) -> Settings:
     )
 
 
-def save_settings(conn: sqlite3.Connection, settings: Settings) -> None:
+def save_settings(conn: sqlite3.Connection, settings: Settings, *, expected: Settings | None = None) -> None:
     if not 60 <= settings.interval <= 7 * 86400:
         raise ValueError("Collection interval must be between 60 seconds and 7 days.")
     repos = parse_repos(",".join(settings.repos))
@@ -58,6 +58,13 @@ def save_settings(conn: sqlite3.Connection, settings: Settings) -> None:
     with conn:
         conn.execute("BEGIN IMMEDIATE")
         old = read_settings(conn)
+        if expected is not None and old != expected:
+            raise ValueError("Settings changed in another session. Reload settings before saving.")
+        # Preserve existing repository spelling to avoid creating duplicate
+        # histories when a user changes only the case of a repository name.
+        known = {row["full_name"].lower(): row["full_name"] for row in conn.execute("SELECT full_name FROM repos")}
+        known.update({repo.lower(): repo for repo in old.repos})
+        repos = tuple(known.get(repo.lower(), repo) for repo in repos)
         # Retain stored history when monitoring is disabled; only cancel queued work.
         removed = set(old.repos) - set(repos)
         conn.executemany("UPDATE collection_status SET pending=0, next_due=NULL WHERE repo=?", [(r,) for r in removed])
@@ -138,8 +145,27 @@ def publish_due(conn: sqlite3.Connection, due: dict[str, tuple[datetime, datetim
         )
 
 
+def annotation_rows(conn: sqlite3.Connection, repo: str) -> list[dict]:
+    return [dict(row) for row in conn.execute("""
+        SELECT e.id,e.title,e.occurred_at,e.notes,e.url,r.tag FROM events e
+        JOIN repos rp ON rp.id=e.repo_id LEFT JOIN releases r ON r.id=e.release_id
+        WHERE rp.full_name=? ORDER BY e.occurred_at DESC,e.id DESC
+    """, (repo,))]
+
+
+def _check_annotation(conn: sqlite3.Connection, repo: str, event_id: int, expected: dict | None) -> None:
+    if expected is None:
+        return
+    current = next((row for row in annotation_rows(conn, repo) if row["id"] == event_id), None)
+    if current is None:
+        raise ValueError("Annotation was deleted in another session. Refresh the annotation form.")
+    if current != expected:
+        raise ValueError("Annotation changed in another session. Refresh the annotation form before saving or deleting.")
+
+
 def save_annotation(conn: sqlite3.Connection, repo: str, occurred_at: str, title: str,
-                    notes: str = "", url: str = "", tag: str = "", event_id: int | None = None) -> None:
+                    notes: str = "", url: str = "", tag: str = "", event_id: int | None = None,
+                    *, expected: dict | None = None) -> None:
     if parse_repos(repo) != (repo,):
         raise ValueError("Enter one valid repository.")
     title = title.strip()
@@ -152,6 +178,9 @@ def save_annotation(conn: sqlite3.Connection, repo: str, occurred_at: str, title
     if url and not url.startswith(("https://", "http://")):
         raise ValueError("Annotation URLs must start with http:// or https://.")
     with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if event_id is not None:
+            _check_annotation(conn, repo, event_id, expected)
         repo_id = upsert_repo(conn, repo)
         release_id = None
         if tag:
@@ -173,6 +202,8 @@ def save_annotation(conn: sqlite3.Connection, repo: str, occurred_at: str, title
                 raise ValueError("Annotation no longer exists for this repository.")
 
 
-def delete_annotation(conn: sqlite3.Connection, repo: str, event_id: int) -> None:
+def delete_annotation(conn: sqlite3.Connection, repo: str, event_id: int, *, expected: dict | None = None) -> None:
     with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _check_annotation(conn, repo, event_id, expected)
         conn.execute("DELETE FROM events WHERE id=? AND repo_id=(SELECT id FROM repos WHERE full_name=?)", (event_id, repo))

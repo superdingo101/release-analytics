@@ -177,7 +177,7 @@ def test_settings_accessible_before_first_collection(tmp_path, monkeypatch):
     assert app.sidebar.toggle[0].label == "Include prereleases"
 
 
-@pytest.mark.parametrize("window,delay", [(0, 3), (300, 600), (0, 21603)])
+@pytest.mark.parametrize("window,delay", [(0, 3), (300, 600), (0, 21603), (300, 21603)])
 def test_aligned_slot_survives_delayed_poll(database, monkeypatch, window, delay):
     from datetime import timedelta
     from db import upsert_repo, upsert_release
@@ -198,7 +198,7 @@ def test_aligned_slot_survives_delayed_poll(database, monkeypatch, window, delay
     late = due + timedelta(seconds=delay)
     scheduler_tick(conn, path, late, settings, fallback, nominal, previous, outstanding)
     assert calls == [repo]
-    assert nominal[repo] == due
+    assert nominal[repo] == due + timedelta(seconds=(delay // settings.interval) * settings.interval)
     # A long delay coalesces missed observations rather than inventing history.
     scheduler_tick(conn, path, late, settings, fallback, nominal, previous, outstanding)
     assert calls == [repo]
@@ -305,3 +305,83 @@ def test_annotation_form_can_reload_new_release_options(database, monkeypatch):
     next(w for w in app.button if w.label == "Refresh annotation form").click().run()
     assert not app.exception
     assert next(w for w in app.selectbox if w.label == "Release (optional)").options == ["", "v1"]
+
+
+def test_consecutive_settings_saves(database, monkeypatch):
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    path, conn = database
+    monkeypatch.setenv("DB_PATH", path)
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    app.sidebar.radio[0].set_value("Settings").run()
+    for repo in ("owner/one", "owner/two"):
+        next(w for w in app.text_area if w.label == "Tracked repositories").set_value(repo)
+        next(w for w in app.button if w.label == "Save settings").click().run()
+        assert not app.exception
+        assert read_settings(conn).repos == (repo,)
+
+
+@pytest.mark.parametrize("change", ["insert", "update", "delete"])
+def test_annotation_concurrent_changes_do_not_discard_or_overwrite_edits(database, monkeypatch, change):
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    path, conn = database
+    repo = "owner/old"
+    monkeypatch.setenv("DB_PATH", path)
+    stamp = "2026-07-01T00:00:00Z"
+    save_annotation(conn, repo, stamp, "Original")
+    event_id = fetch_rows(conn, "SELECT id FROM events")[0]["id"]
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    app.sidebar.radio[0].set_value("Settings").run()
+    next(w for w in app.selectbox if w.label == "Annotation").set_value(event_id).run()
+    next(w for w in app.text_input if w.label == "Title").set_value("My edit")
+    if change == "insert":
+        save_annotation(conn, repo, "2026-07-02T00:00:00Z", "Other")
+    elif change == "update":
+        save_annotation(conn, repo, stamp, "Other edit", event_id=event_id)
+    else:
+        delete_annotation(conn, repo, event_id)
+    next(w for w in app.button if w.label == "Save annotation").click().run()
+    assert not app.exception
+    rows = fetch_rows(conn, "SELECT id,title FROM events ORDER BY id")
+    if change == "insert":
+        assert [row["title"] for row in rows] == ["My edit", "Other"]
+    elif change == "update":
+        assert [row["title"] for row in rows] == ["Other edit"]
+        assert app.error
+    else:
+        assert rows == []
+        assert app.error
+
+
+def test_settings_conflict_is_rejected_and_case_only_changes_preserve_history(database):
+    _, conn = database
+    old = read_settings(conn)
+    save_settings(conn, Settings(("OWNER/OLD",), (), 3600, True), expected=old)
+    assert read_settings(conn).repos == ("owner/old",)
+    with pytest.raises(ValueError, match="another session"):
+        save_settings(conn, Settings(("owner/new",), (), 7200, False), expected=old)
+    assert read_settings(conn).interval == 3600
+
+
+def test_history_rejects_multiple_timestamps_and_impossible_counts(database):
+    from import_history import import_history
+    path, conn = database
+    first = "Current UTC time: 2026-07-02T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8"
+    with pytest.raises(ValueError, match="one snapshot"):
+        import_history("owner/old", first + "\nCurrent UTC time: 2026-07-03T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=9", path)
+    with pytest.raises(ValueError, match="integer range"):
+        import_history("owner/old", first.replace("app.js=8", "app.js=9223372036854775808"), path)
+    assert not fetch_rows(conn, "SELECT * FROM download_snapshots")
+
+
+def test_history_rejects_timestamp_before_existing_release(database):
+    from db import upsert_repo, upsert_release
+    from import_history import import_history
+    path, conn = database
+    upsert_release(conn, upsert_repo(conn, "owner/old"), "v1", "2026-07-03T00:00:00Z", False, False, "")
+    conn.commit()
+    with pytest.raises(ValueError, match="stored release"):
+        import_history("OWNER/OLD", "Current UTC time: 2026-07-02T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path)
+    assert not fetch_rows(conn, "SELECT * FROM download_snapshots")
+    assert len(fetch_rows(conn, "SELECT * FROM repos")) == 1

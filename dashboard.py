@@ -101,10 +101,17 @@ default_start = start_param.date() if not pd.isna(start_param) and min_date <= s
 default_end = end_param.date() if not pd.isna(end_param) and min_date <= end_param.date() <= max_date else max_date
 if default_start > default_end:
     default_start, default_end = min_date, max_date
-start, end = st.sidebar.date_input("Snapshot date range", value=(default_start, default_end), min_value=min_date, max_value=max_date)
+date_range = st.sidebar.date_input("Snapshot date range", value=(default_start, default_end), min_value=min_date, max_value=max_date)
+if len(date_range) != 2:
+    st.info("Choose both dates to display the selected range.")
+    st.stop()
+start, end = date_range
 set_query_param("start", start.isoformat())
 set_query_param("end", end.isoformat())
 df = df[(df["collected_at"].dt.date >= start) & (df["collected_at"].dt.date <= end)]
+if df.empty:
+    st.info("No snapshots in the selected date range.")
+    st.stop()
 
 with connect(db_path) as conn:
     totals = [

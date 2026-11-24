@@ -197,7 +197,14 @@ def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previou
             continue
         if collect_managed_repo(conn, repo, db_path):
             if repo in scheduled:
-                last_nominal[repo] = next_due[repo][1]
+                nominal = next_due[repo][1]
+                if repo in anchors:
+                    # One observation cannot reconstruct skipped intervals.
+                    # A delayed run satisfies all elapsed slots, not just the
+                    # oldest outstanding slot.
+                    elapsed_slots = max(0, int((now - nominal).total_seconds() // interval))
+                    nominal += timedelta(seconds=elapsed_slots * interval)
+                last_nominal[repo] = nominal
                 outstanding.pop(repo, None)
             if repo not in anchors and repo in scheduled:
                 fallback[repo] = now + timedelta(seconds=interval)
