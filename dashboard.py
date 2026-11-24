@@ -7,13 +7,15 @@ import os
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from config import hidden_release_tags, load_env
+from config import load_env
+from pathlib import Path
+from management import read_settings
+from settings_ui import render_settings, render_collection_status
 
 from db import DB_PATH, asset_names_for_repo, connect, current_adoption_percentage, downloads_added_between_snapshots, fetch_rows, init_db, milestone_download_totals, snapshots_for_repo, total_downloads_by_release
 
 load_env()
 DEFAULT_DB_PATH = os.getenv("DB_PATH", DB_PATH)
-HIDDEN_RELEASE_TAGS = hidden_release_tags()
 
 st.set_page_config(page_title="Release Download Analytics", layout="wide")
 st.title("Release Download Analytics")
@@ -43,20 +45,38 @@ def repos(db_path: str) -> list[str]:
         init_db(conn)
         return [row["full_name"] for row in fetch_rows(conn, "SELECT full_name FROM repos ORDER BY full_name")]
 
+page = st.sidebar.radio("Page", ["Dashboard", "Settings"])
+if page == "Settings":
+    render_settings(DEFAULT_DB_PATH)
+    st.stop()
+
 db_path = st.sidebar.text_input("SQLite database", DEFAULT_DB_PATH)
+with connect(db_path) as conn:
+    init_db(conn)
+    settings = read_settings(conn)
+HIDDEN_RELEASE_TAGS = set(settings.excluded_tags)
 repo_names = repos(db_path)
+if Path(db_path).resolve() == Path(DEFAULT_DB_PATH).resolve():
+    # Include newly configured repositories before their first observation.
+    repo_names = list(dict.fromkeys([*repo_names, *settings.repos]))
 if not repo_names:
-    st.info("No data yet. Run collector.py or import_history.py first.")
+    st.info("No data yet. Open Settings to add a repository or import history.")
     st.stop()
 
 repo_param = query_param_first("repo")
 repo_index = repo_names.index(repo_param) if repo_param in repo_names else 0
 repo = st.sidebar.selectbox("Repository", repo_names, index=repo_index)
 set_query_param("repo", repo)
+if Path(db_path).resolve() == Path(DEFAULT_DB_PATH).resolve():
+    render_collection_status(db_path, repo)
 include_prereleases = st.sidebar.toggle("Include prereleases", value=bool_query_param("include_prereleases", True))
 set_query_param("include_prereleases", "1" if include_prereleases else "0")
 with connect(db_path) as conn:
     asset_names = asset_names_for_repo(conn, repo, HIDDEN_RELEASE_TAGS)
+
+if not asset_names:
+    st.info("No visible release assets yet. Collect now or review excluded releases in Settings.")
+    st.stop()
 
 asset_param = query_param_first("asset")
 default_index = asset_names.index("skylight-calendar-card.js") if "skylight-calendar-card.js" in asset_names else 0
@@ -81,10 +101,17 @@ default_start = start_param.date() if not pd.isna(start_param) and min_date <= s
 default_end = end_param.date() if not pd.isna(end_param) and min_date <= end_param.date() <= max_date else max_date
 if default_start > default_end:
     default_start, default_end = min_date, max_date
-start, end = st.sidebar.date_input("Snapshot date range", value=(default_start, default_end), min_value=min_date, max_value=max_date)
+date_range = st.sidebar.date_input("Snapshot date range", value=(default_start, default_end), min_value=min_date, max_value=max_date)
+if len(date_range) != 2:
+    st.info("Choose both dates to display the selected range.")
+    st.stop()
+start, end = date_range
 set_query_param("start", start.isoformat())
 set_query_param("end", end.isoformat())
 df = df[(df["collected_at"].dt.date >= start) & (df["collected_at"].dt.date <= end)]
+if df.empty:
+    st.info("No snapshots in the selected date range.")
+    st.stop()
 
 with connect(db_path) as conn:
     totals = [
@@ -119,7 +146,7 @@ selected_releases = st.multiselect(
     default=default_releases,
     help=(
         "Select releases for the total downloads, daily downloads, and milestone sections. "
-        "Releases configured in EXCLUDED_RELEASE_TAGS or HIDDEN_RELEASES are omitted from "
+        "Releases excluded in Settings (or environment defaults) are omitted from "
         "dashboard metrics, charts, tables, and this selector. "
         "The cumulative release-age chart always includes all non-hidden releases from the repo, asset, "
         "prerelease, and date filters so its Plotly legend can show/hide releases interactively "
@@ -178,8 +205,9 @@ with limit_col:
     release_age_days_limit = st.number_input(
         "Show release age through day",
         min_value=0.0,
-        max_value=max_release_age_days,
+        max_value=max(0.01, max_release_age_days),
         value=st.session_state.release_age_days_limit,
+        disabled=max_release_age_days == 0.0,
         step=1.0,
         format="%.2f",
         key="release_age_days_limit",

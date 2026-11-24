@@ -8,9 +8,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 
-from collector import collect_repo, configured_repos
+from collector import collect_repo
 from config import load_env
 from db import DB_PATH, connect, init_db, parse_utc
+from contextlib import closing
+from management import (read_settings, recover_interrupted, pending_repos,
+                        start_collection, finish_collection, publish_due)
 
 log = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 21600
@@ -109,13 +112,14 @@ def due_repos(next_due: dict[str, tuple[datetime, datetime]], now: datetime, due
     return [repo for repo, (due_at, _) in next_due.items() if due_at <= ready_at]
 
 
-def latest_release_anchors(db_path: str, repos: Iterable[str]) -> dict[str, datetime]:
+def latest_release_anchors(db_path: str, repos: Iterable[str], *, initialize: bool = True) -> dict[str, datetime]:
     """Load the latest non-draft release published_at for each configured repo."""
     repo_names = [repo.strip() for repo in repos if repo.strip()]
     if not repo_names:
         return {}
-    with connect(db_path) as conn:
-        init_db(conn)
+    with closing(connect(db_path)) as conn:
+        if initialize:
+            init_db(conn)
         rows = conn.execute(
             f"""
             SELECT rp.full_name, MAX(r.published_at) AS published_at
@@ -137,57 +141,92 @@ def collect_repos(repos: Iterable[str], db_path: str) -> None:
             log.exception("Failed to collect %s", repo)
 
 
+def collect_managed_repo(conn, repo: str, db_path: str) -> bool:
+    """Run one collection through the scheduler, never through a web request."""
+    if not start_collection(conn, repo):
+        return False
+    success = False
+    try:
+        collect_repo(repo, db_path)
+        success = True
+    except Exception:
+        log.exception("Failed to collect %s", repo)
+    finally:
+        finish_collection(conn, repo, success)
+    return True
+
+
+SETTINGS_POLL_SECONDS = 5
+
+
+def scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings, outstanding):
+    """One scheduler iteration; return the current settings for the next tick."""
+    interval = settings.interval
+    repos = settings.repos
+    if previous_settings is not None and previous_settings.interval != interval:
+        fallback.clear()
+        last_nominal.clear()
+        outstanding.clear()
+    for repo in set(fallback) - set(repos):
+        fallback.pop(repo, None)
+    for repo in set(last_nominal) - set(repos):
+        last_nominal.pop(repo, None)
+    anchors = latest_release_anchors(db_path, repos, initialize=False)
+    for repo in list(outstanding):
+        if repo not in repos or outstanding[repo][0] != anchors.get(repo):
+            outstanding.pop(repo)
+    for repo in repos:
+        if repo not in anchors:
+            fallback.setdefault(repo, now + timedelta(seconds=interval))
+    due_window = min(int(os.getenv("SCHEDULE_DUE_WINDOW_SECONDS", str(DEFAULT_DUE_WINDOW_SECONDS))), interval - 1)
+    next_due = next_due_by_repo(repos, anchors, now, interval, fallback, last_nominal, due_window)
+    # Keep the previously announced slot until it is processed, even if a
+    # polling tick or a slow manual collection crosses the due window.
+    for repo, slot in next_due.items():
+        if repo in outstanding:
+            next_due[repo] = outstanding[repo][1]
+        else:
+            outstanding[repo] = (anchors.get(repo), slot)
+    publish_due(conn, next_due)
+    scheduled = set(due_repos(next_due, now, 0))
+    requested = pending_repos(conn, repos)
+    if previous_settings is None and settings.collect_on_start:
+        requested.update(repos)
+    for repo in repos:
+        if repo not in scheduled and repo not in requested:
+            continue
+        if collect_managed_repo(conn, repo, db_path):
+            if repo in scheduled:
+                nominal = next_due[repo][1]
+                if repo in anchors:
+                    # One observation cannot reconstruct skipped intervals.
+                    # A delayed run satisfies all elapsed slots, not just the
+                    # oldest outstanding slot.
+                    elapsed_slots = max(0, int((now - nominal).total_seconds() // interval))
+                    nominal += timedelta(seconds=elapsed_slots * interval)
+                last_nominal[repo] = nominal
+                outstanding.pop(repo, None)
+            if repo not in anchors and repo in scheduled:
+                fallback[repo] = now + timedelta(seconds=interval)
+    return settings
+
+
 def run_collector_loop() -> None:
     load_env()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
     db_path = os.getenv("DB_PATH", DB_PATH)
-    interval = int(os.getenv("RUN_INTERVAL_SECONDS", str(DEFAULT_INTERVAL_SECONDS)))
-    due_window = int(os.getenv("SCHEDULE_DUE_WINDOW_SECONDS", str(DEFAULT_DUE_WINDOW_SECONDS)))
-    collect_on_start = os.getenv("COLLECT_ON_START", "true").lower() == "true"
-    repos = configured_repos()
-    if not repos:
-        raise SystemExit("No repositories configured. Set REPOS.")
-
-    fallback_due_by_repo: dict[str, datetime] = {}
-    last_nominal_by_repo: dict[str, datetime] = {}
-
-    if collect_on_start:
-        collect_repos(repos, db_path)
-
-    while True:
-        now = datetime.now(timezone.utc).replace(microsecond=0)
-        anchors_by_repo = latest_release_anchors(db_path, repos)
-        next_due = next_due_by_repo(
-            repos,
-            anchors_by_repo,
-            now,
-            interval,
-            fallback_due_by_repo,
-            last_nominal_by_repo,
-            due_window,
-        )
-        if not next_due:
-            raise SystemExit("No repositories configured. Set REPOS.")
-
-        earliest_due = min(due_at for due_at, _ in next_due.values())
-        sleep_for = max(0.0, (earliest_due - now).total_seconds())
-        if sleep_for > MAX_SLEEP_SECONDS:
-            log.warning("Capping scheduler sleep from %.0fs to %.0fs", sleep_for, MAX_SLEEP_SECONDS)
-            sleep_for = MAX_SLEEP_SECONDS
-        if sleep_for > 0:
-            time.sleep(max(MIN_SLEEP_SECONDS, sleep_for))
-
-        woke_at = datetime.now(timezone.utc).replace(microsecond=0)
-        ready_repos = due_repos(next_due, woke_at, due_window)
-        if not ready_repos:
-            continue
-
-        collect_repos(ready_repos, db_path)
-        for repo in ready_repos:
-            _, nominal = next_due[repo]
-            last_nominal_by_repo[repo] = nominal
-            if repo not in anchors_by_repo:
-                fallback_due_by_repo[repo] = woke_at + timedelta(seconds=interval)
+    fallback: dict[str, datetime] = {}
+    last_nominal: dict[str, datetime] = {}
+    previous_settings = None
+    outstanding: dict[str, tuple[datetime | None, tuple[datetime, datetime]]] = {}
+    with closing(connect(db_path)) as conn:
+        init_db(conn)
+        recover_interrupted(conn)
+        while True:
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            settings = read_settings(conn)
+            previous_settings = scheduler_tick(conn, db_path, now, settings, fallback, last_nominal, previous_settings, outstanding)
+            time.sleep(SETTINGS_POLL_SECONDS)
 
 
 if __name__ == "__main__":

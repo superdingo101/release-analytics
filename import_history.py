@@ -7,8 +7,10 @@ import hashlib
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 from config import load_env
+from management import read_settings
 
 from db import DB_PATH, connect, init_db, insert_snapshot, upsert_asset, upsert_release, upsert_repo
 
@@ -35,6 +37,8 @@ def parse_history(text: str) -> tuple[str, list[dict[str, object]]]:
             continue
         time_match = TIME_RE.search(line)
         if time_match:
+            if collected_at is not None:
+                raise ValueError("Import one snapshot timestamp at a time.")
             collected_at = time_match.group("time")
             continue
         match = LINE_RE.match(line)
@@ -54,15 +58,41 @@ def parse_history(text: str) -> tuple[str, list[dict[str, object]]]:
     return collected_at, snapshots
 
 
+def _timestamp(value: str) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("Historical timestamps must include a timezone.")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def import_history(repo: str, text: str, db_path: str | None = None) -> int:
     collected_at, snapshots = parse_history(text)
+    collected_at = _timestamp(collected_at)
+    for snap in snapshots:
+        snap["published_at"] = _timestamp(str(snap["published_at"]))
+        if str(snap["published_at"]) > collected_at:
+            raise ValueError("A snapshot cannot precede release publication.")
+        if int(snap["download_count"]) > 2**63 - 1:
+            raise ValueError("Download count exceeds SQLite integer range.")
     db_path = db_path or os.getenv("DB_PATH", DB_PATH)
     with connect(db_path) as conn:
         init_db(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT full_name FROM repos WHERE full_name = ? COLLATE NOCASE ORDER BY id LIMIT 1", (repo,)).fetchone()
+        if existing:
+            repo = existing["full_name"]
+        else:
+            # Match the configured spelling even before the first collection.
+            repo = next((name for name in read_settings(conn).repos if name.lower() == repo.lower()), repo)
         repo_id = upsert_repo(conn, repo)
         for snap in snapshots:
-            release_id = upsert_release(conn, repo_id, str(snap["tag"]), str(snap["published_at"]), False, False, "")
-            asset_id = upsert_asset(conn, release_id, synthetic_asset_id(repo, str(snap["tag"]), str(snap["asset_name"])), str(snap["asset_name"]))
+            tag, name = str(snap["tag"]), str(snap["asset_name"])
+            release = conn.execute("SELECT id, published_at FROM releases WHERE repo_id=? AND tag=?", (repo_id, tag)).fetchone()
+            if release and _timestamp(release["published_at"]) > collected_at:
+                raise ValueError("A snapshot cannot precede the stored release publication.")
+            release_id = release["id"] if release else upsert_release(conn, repo_id, tag, str(snap["published_at"]), False, False, "")
+            asset = conn.execute("SELECT id FROM assets WHERE release_id=? AND name=?", (release_id, name)).fetchone()
+            asset_id = asset["id"] if asset else upsert_asset(conn, release_id, synthetic_asset_id(repo, tag, name), name)
             insert_snapshot(conn, asset_id, collected_at, int(snap["download_count"]))
         conn.commit()
     return len(snapshots)
