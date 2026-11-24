@@ -15,6 +15,16 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Verify shell script checkout uses LF with autocrlf enabled
+        run: |
+          rm docker-entrypoint.sh
+          git -c core.autocrlf=true checkout-index --force docker-entrypoint.sh
+          python3 -c 'from pathlib import Path; assert b"\r" not in Path("docker-entrypoint.sh").read_bytes()'
+
+      - name: Simulate a CRLF build context
+        run: |
+          python3 -c 'from pathlib import Path; p = Path("docker-entrypoint.sh"); p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))'
+
       - name: Build image
         run: docker build --tag release-analytics:test .
 
