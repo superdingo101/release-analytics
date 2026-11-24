@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 from config import load_env
+from management import read_settings
 
 from db import DB_PATH, connect, init_db, insert_snapshot, upsert_asset, upsert_release, upsert_repo
 
@@ -80,6 +81,9 @@ def import_history(repo: str, text: str, db_path: str | None = None) -> int:
         existing = conn.execute("SELECT full_name FROM repos WHERE full_name = ? COLLATE NOCASE ORDER BY id LIMIT 1", (repo,)).fetchone()
         if existing:
             repo = existing["full_name"]
+        else:
+            # Match the configured spelling even before the first collection.
+            repo = next((name for name in read_settings(conn).repos if name.lower() == repo.lower()), repo)
         repo_id = upsert_repo(conn, repo)
         for snap in snapshots:
             tag, name = str(snap["tag"]), str(snap["asset_name"])

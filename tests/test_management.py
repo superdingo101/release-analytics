@@ -385,3 +385,55 @@ def test_history_rejects_timestamp_before_existing_release(database):
         import_history("OWNER/OLD", "Current UTC time: 2026-07-02T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path)
     assert not fetch_rows(conn, "SELECT * FROM download_snapshots")
     assert len(fetch_rows(conn, "SELECT * FROM repos")) == 1
+
+
+def test_history_import_before_first_collection_uses_tracked_repo_identity(database):
+    from import_history import import_history
+    from db import snapshots_for_repo
+    path, conn = database
+    import_history("OWNER/OLD", "Current UTC time: 2026-07-02T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path)
+    assert fetch_rows(conn, "SELECT full_name FROM repos") == [{"full_name": "owner/old"}]
+    assert snapshots_for_repo(conn, "owner/old")[0]["download_count"] == 8
+
+
+def test_duplicate_annotation_labels_remain_distinct(database, monkeypatch):
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    path, conn = database
+    monkeypatch.setenv("DB_PATH", path)
+    for notes in ("first", "second"):
+        save_annotation(conn, "owner/old", "2026-07-01T00:00:00Z", "Same title", notes)
+    ids = [row["id"] for row in fetch_rows(conn, "SELECT id FROM events ORDER BY id")]
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    app.sidebar.radio[0].set_value("Settings").run()
+    selector = next(w for w in app.selectbox if w.label == "Annotation")
+    assert len(set(selector.options)) == 3
+    selector.set_value(ids[0]).run()
+    next(w for w in app.text_input if w.label == "Title").set_value("Changed first")
+    next(w for w in app.button if w.label == "Save annotation").click().run()
+    assert not app.exception
+    assert fetch_rows(conn, "SELECT title,notes FROM events ORDER BY id") == [
+        {"title": "Changed first", "notes": "first"}, {"title": "Same title", "notes": "second"}
+    ]
+
+
+def test_dashboard_partial_and_empty_date_ranges(database, monkeypatch):
+    from pathlib import Path
+    from datetime import date
+    from db import upsert_repo, upsert_release, upsert_asset, insert_snapshot
+    from streamlit.testing.v1 import AppTest
+    path, conn = database
+    monkeypatch.setenv("DB_PATH", path)
+    release = upsert_release(conn, upsert_repo(conn, "owner/old"), "v1", "2026-07-01T00:00:00Z", False, False, "")
+    asset = upsert_asset(conn, release, 123, "app.js")
+    insert_snapshot(conn, asset, "2026-07-01T00:00:00Z", 8)
+    insert_snapshot(conn, asset, "2026-07-03T00:00:00Z", 10)
+    conn.commit()
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    assert not app.exception
+    app.sidebar.date_input[0].set_value((date(2026, 7, 2),)).run()
+    assert not app.exception
+    assert any("Choose both dates" in item.value for item in app.info)
+    app.sidebar.date_input[0].set_value((date(2026, 7, 2), date(2026, 7, 2))).run()
+    assert not app.exception
+    assert any("No snapshots in the selected date range" in item.value for item in app.info)

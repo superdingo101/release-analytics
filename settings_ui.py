@@ -149,7 +149,7 @@ def render_settings(db_path: str) -> None:
     chosen = st.selectbox("Annotation", ids,
                           index=ids.index(st.session_state.annotation_picker_default),
                           key=f"annotation_event_{st.session_state.annotation_event_generation}",
-                          format_func=lambda key: "New annotation" if key is None else f"{options[key]['title']} ({options[key]['occurred_at']})")
+                          format_func=lambda key: "New annotation" if key is None else f"{options[key]['title']} ({options[key]['occurred_at']}) · #{key}")
     st.session_state.annotation_selected_repo = repo
     st.session_state.annotation_selected_event = chosen
     context = (repo, chosen)

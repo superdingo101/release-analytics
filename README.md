@@ -61,7 +61,7 @@ Open **Settings** in the sidebar to configure tracked repositories, globally exc
 
 The sidebar shows the selected repository's last successful scheduler collection, next scheduled collection, and queued/running/error state. Use **Collect now** to request an immediate collection without interrupting the existing release-aligned schedule; **Refresh collection status** updates the display. CLI collections and imported history do not update scheduler status. Settings and manual collection manage the configured DB_PATH, not alternate databases opened for viewing.
 
-Settings also supports pasting historical snapshot text and creating, editing, or deleting repository annotations. GitHub credentials, logging, and server binding remain environment configuration. The dashboard has no built-in authentication: expose it only to trusted users or behind an authenticated reverse proxy.
+Settings also supports pasting historical snapshot text (one collection timestamp at a time) and creating, editing, or deleting repository annotations. If settings or an annotation change in another browser session, stale edits are rejected rather than overwriting newer values; reload the form to continue. Newly discovered releases and annotations can be loaded using the form refresh control. GitHub credentials, logging, and server binding remain environment configuration. The dashboard has no built-in authentication: expose it only to trusted users or behind an authenticated reverse proxy.
 
 ## Runtime configuration
 
