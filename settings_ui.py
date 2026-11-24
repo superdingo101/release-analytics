@@ -107,19 +107,31 @@ def render_settings(db_path: str) -> None:
     chosen = st.selectbox("Annotation", [None, *options], format_func=lambda key: "New annotation" if key is None else f"{options[key]['title']} ({options[key]['occurred_at']})")
     event = options.get(chosen, {})
     context = (repo, chosen)
-    # Streamlit includes widget defaults in its identity. Freeze the new
-    # timestamp for the lifetime of this form, including submit reruns.
+    # Streamlit widget identity includes defaults and, on older versions,
+    # selectbox options. Freeze both for the lifetime of this form so a
+    # collection discovering new releases cannot reinterpret a submitted index.
     if st.session_state.get("annotation_context") != context:
         st.session_state.annotation_context = context
         st.session_state.annotation_default_time = event.get("occurred_at") or utc_now_iso()
+        st.session_state.annotation_tags = tags
+        st.session_state.annotation_default_tag = event.get("tag") or ""
         st.session_state.annotation_generation = st.session_state.get("annotation_generation", 0) + 1
     generation = st.session_state.annotation_generation
+    form_tags = st.session_state.annotation_tags
+    default_tag = st.session_state.annotation_default_tag
+    if form_tags != tags:
+        st.caption("Release list changed. Your current form is preserved; refresh to see new releases.")
+        if st.button("Refresh annotation form", help="Discard unsaved annotation changes and reload available releases."):
+            st.session_state.annotation_context = None
+            st.rerun()
     with st.form(f"annotation_{repo}_{chosen}_{generation}"):
         title = st.text_input("Title", value=event.get("title", ""))
         occurred = st.text_input("Date and time (ISO 8601 with timezone)",
                                  value=st.session_state.annotation_default_time,
                                  key=f"annotation_time_{generation}")
-        tag = st.selectbox("Release (optional)", tags, index=tags.index(event.get("tag") or "") if (event.get("tag") or "") in tags else 0)
+        tag = st.selectbox("Release (optional)", form_tags,
+                           index=form_tags.index(default_tag) if default_tag in form_tags else 0,
+                           key=f"annotation_release_{generation}")
         notes = st.text_area("Notes", value=event.get("notes") or "")
         url = st.text_input("URL (optional)", value=event.get("url") or "")
         if st.form_submit_button("Save annotation"):

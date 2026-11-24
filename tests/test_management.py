@@ -252,3 +252,56 @@ def test_annotation_keeps_user_timestamp_across_reruns(database, monkeypatch):
         {"title": "Old launch", "occurred_at": "2020-01-01T00:00:00Z"}
     ]
     assert next(w for w in app.text_input if w.label.startswith("Date and time")).value == clock[0]
+
+
+@pytest.mark.parametrize("editing", [False, True])
+def test_annotation_release_survives_background_discovery(database, monkeypatch, editing):
+    from pathlib import Path
+    from db import upsert_repo, upsert_release
+    from streamlit.testing.v1 import AppTest
+
+    path, conn = database
+    repo = "owner/old"
+    monkeypatch.setenv("DB_PATH", path)
+    repo_id = upsert_repo(conn, repo)
+    original_release = upsert_release(conn, repo_id, "v1", "2026-07-01T00:00:00Z", False, False, "")
+    conn.commit()
+    if editing:
+        save_annotation(conn, repo, "2026-07-01T12:00:00Z", "Original annotation")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    app.sidebar.radio[0].set_value("Settings").run()
+    if editing:
+        event_id = fetch_rows(conn, "SELECT id FROM events")[0]["id"]
+        next(w for w in app.selectbox if w.label == "Annotation").set_value(event_id).run()
+    assert not app.exception
+    next(w for w in app.text_input if w.label == "Title").set_value("Linked annotation")
+    next(w for w in app.selectbox if w.label == "Release (optional)").set_value("v1")
+    # A new release sorts ahead of v1 and changes its index in the live list.
+    upsert_release(conn, repo_id, "v2", "2026-07-02T00:00:00Z", False, False, "")
+    conn.commit()
+    next(w for w in app.button if w.label == "Save annotation").click().run()
+    assert not app.exception
+    assert fetch_rows(conn, "SELECT title, release_id FROM events") == [
+        {"title": "Linked annotation", "release_id": original_release}
+    ]
+    assert next(w for w in app.selectbox if w.label == "Release (optional)").options == ["", "v2", "v1"]
+
+
+def test_annotation_form_can_reload_new_release_options(database, monkeypatch):
+    from pathlib import Path
+    from db import upsert_repo, upsert_release
+    from streamlit.testing.v1 import AppTest
+
+    path, conn = database
+    monkeypatch.setenv("DB_PATH", path)
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py")).run()
+    app.sidebar.radio[0].set_value("Settings").run()
+    assert next(w for w in app.selectbox if w.label == "Release (optional)").options == [""]
+    upsert_release(conn, upsert_repo(conn, "owner/old"), "v1", "2026-07-01T00:00:00Z", False, False, "")
+    conn.commit()
+    app.run()
+    assert not app.exception
+    assert next(w for w in app.selectbox if w.label == "Release (optional)").options == [""]
+    next(w for w in app.button if w.label == "Refresh annotation form").click().run()
+    assert not app.exception
+    assert next(w for w in app.selectbox if w.label == "Release (optional)").options == ["", "v1"]
