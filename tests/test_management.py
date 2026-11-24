@@ -132,3 +132,46 @@ def test_history_import_preserves_live_release_and_asset_metadata(database):
     with pytest.raises(ValueError, match="precede"):
         import_history("owner/old", "Current UTC time: 2026-06-30T00:00:00Z\nv1 2026-07-01T00:00:00Z app.js=8", path)
     assert len(snapshots_for_repo(conn, "owner/old")) == 1
+
+
+def test_scheduled_and_manual_requests_share_one_collection(database, monkeypatch):
+    from datetime import timedelta
+    path, conn = database
+    calls = []
+    monkeypatch.setattr("scheduler.collect_repo", lambda repo, db_path: calls.append(repo))
+    now = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    fallback, nominal = {}, {}
+    settings = read_settings(conn)
+    scheduler_tick(conn, path, now, settings, fallback, nominal, None)
+    due = now + timedelta(seconds=settings.interval)
+    request_collection(conn, "owner/old")
+    scheduler_tick(conn, path, due, settings, fallback, nominal, settings)
+    scheduler_tick(conn, path, due, settings, fallback, nominal, settings)
+    assert calls == ["owner/old"]
+    assert fallback["owner/old"] == due + timedelta(seconds=settings.interval)
+
+
+def test_settings_accessible_before_first_collection(tmp_path, monkeypatch):
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    path = str(tmp_path / "empty.sqlite3")
+    monkeypatch.setenv("DB_PATH", path)
+    monkeypatch.setenv("REPOS", "")
+    monkeypatch.setenv("RUN_INTERVAL_SECONDS", "21600")
+    monkeypatch.setenv("COLLECT_ON_START", "false")
+    monkeypatch.setenv("EXCLUDED_RELEASE_TAGS", "")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "dashboard.py"))
+    app.run()
+    assert not app.exception
+    app.sidebar.radio[0].set_value("Settings").run()
+    assert not app.exception
+    next(widget for widget in app.text_area if widget.label == "Tracked repositories").set_value("owner/new")
+    next(widget for widget in app.button if widget.label == "Save settings").click().run()
+    assert not app.exception
+    with connect(path) as conn:
+        assert read_settings(conn).repos == ("owner/new",)
+        assert pending_repos(conn, ["owner/new"]) == {"owner/new"}
+    app.sidebar.radio[0].set_value("Dashboard").run()
+    assert not app.exception
+    assert app.sidebar.selectbox[0].value == "owner/new"
+    assert app.sidebar.toggle[0].label == "Include prereleases"
